@@ -1,2 +1,0 @@
-# MS-REPORT-PY
-Reportes
