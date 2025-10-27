@@ -9,7 +9,10 @@ from .reports import (
     ZoneStatistics,
     SystemMetrics,
     ExportRequest,
-    HealthResponse
+    HealthResponse,
+    SalesComparisonItem,
+    CitySalesComparisonItem,
+    SalesComparisonResponse
 )
 
 __all__ = [
@@ -20,6 +23,9 @@ __all__ = [
     "ZoneStatistics",
     "SystemMetrics",
     "ExportRequest",
-    "HealthResponse"
+    "HealthResponse",
+    "SalesComparisonItem",
+    "CitySalesComparisonItem",
+    "SalesComparisonResponse"
 ]
 

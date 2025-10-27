@@ -17,7 +17,10 @@ from ..schemas import (
     ZoneStatistics,
     SystemMetrics,
     ExportRequest,
-    HealthResponse
+    HealthResponse,
+    SalesComparisonResponse,
+    SalesComparisonItem,
+    CitySalesComparisonItem
 )
 from ..utils import get_current_user, ms_client
 from ..config import settings
@@ -298,6 +301,127 @@ async def export_report(
     
     else:
         raise HTTPException(400, f"Formato no soportado: {export_request.format}")
+
+
+@router.get("/sales-comparison", response_model=SalesComparisonResponse)
+async def get_sales_comparison(
+    comparison_type: str = Query("both", description="Tipo de comparación: zones, cities, both"),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    Comparación de ventas entre zonas y ciudades
+    
+    Detecta áreas de mayor desempeño basado en:
+    - Número de tenderos asignados (actividad de mercado)
+    - Número de vendedores
+    - Score de desempeño calculado
+    """
+    token = authorization.replace("Bearer ", "") if authorization else None
+    
+    # Obtener datos de los microservicios
+    cities = await ms_client.get_all_cities()
+    zones = await ms_client.get_all_zones()
+    sellers = await ms_client.get_all_sellers(token=token)
+    assignments = await ms_client.get_all_assignments(token=token)
+    
+    # Filtrar solo asignaciones activas
+    active_assignments = [a for a in assignments if a.get("is_active", True)]
+    
+    # Calcular datos por zona
+    zones_data = []
+    for zone in zones:
+        # Obtener vendedores de esta zona
+        zone_sellers = [s for s in sellers if s.get("zone_id") == zone["id"]]
+        
+        # Contar tenderos asignados a esta zona
+        zone_seller_ids = [s["id"] for s in zone_sellers]
+        zone_shopkeepers_count = len([
+            a for a in active_assignments 
+            if a.get("seller_id") in zone_seller_ids
+        ])
+        
+        # Calcular score de desempeño
+        # Basado en: tenderos asignados, número de vendedores
+        sellers_count = len(zone_sellers)
+        if sellers_count > 0:
+            avg_shopkeepers = zone_shopkeepers_count / sellers_count
+            # Score basado en penetración de mercado (promedio de tenderos por vendedor)
+            performance_score = min(100, (avg_shopkeepers / 50) * 100)  # 50 tenderos = 100%
+            market_penetration = round(avg_shopkeepers, 2)
+        else:
+            performance_score = 0
+            market_penetration = 0
+        
+        # Obtener nombre de ciudad
+        city_name = next(
+            (c["name"] for c in cities if c["id"] == zone.get("city_id")),
+            "Desconocida"
+        )
+        
+        zones_data.append(SalesComparisonItem(
+            zone_id=zone["id"],
+            zone_name=zone["name"],
+            city_id=zone.get("city_id", 0),
+            city_name=city_name,
+            total_shopkeepers=zone_shopkeepers_count,
+            total_sellers=sellers_count,
+            performance_score=round(performance_score, 2),
+            market_penetration=market_penetration
+        ))
+    
+    # Calcular datos por ciudad
+    cities_data = []
+    for city in cities:
+        city_zones = [z for z in zones if z.get("city_id") == city["id"]]
+        
+        city_sellers = [
+            s for s in sellers 
+            if s.get("zone_id") in [z["id"] for z in city_zones]
+        ]
+        
+        city_seller_ids = [s["id"] for s in city_sellers]
+        city_shopkeepers_count = len([
+            a for a in active_assignments 
+            if a.get("seller_id") in city_seller_ids
+        ])
+        
+        total_zones = len(city_zones)
+        sellers_count = len(city_sellers)
+        
+        if sellers_count > 0:
+            avg_shopkeepers = city_shopkeepers_count / sellers_count
+            performance_score = min(100, (avg_shopkeepers / 50) * 100)
+            market_penetration = round(avg_shopkeepers, 2)
+        else:
+            performance_score = 0
+            market_penetration = 0
+        
+        cities_data.append(CitySalesComparisonItem(
+            city_id=city["id"],
+            city_name=city["name"],
+            total_zones=total_zones,
+            total_shopkeepers=city_shopkeepers_count,
+            total_sellers=sellers_count,
+            performance_score=round(performance_score, 2),
+            market_penetration=market_penetration
+        ))
+    
+    # Identificar top performers (top 3)
+    sorted_zones = sorted(zones_data, key=lambda x: x.performance_score, reverse=True)
+    top_performers = sorted_zones[:3] if len(sorted_zones) >= 3 else sorted_zones
+    
+    # Determinar tipo de datos a retornar
+    if comparison_type == "cities":
+        zones_data = []
+    
+    return SalesComparisonResponse(
+        report_date=datetime.now(),
+        comparison_type=comparison_type,
+        zones=zones_data,
+        cities=cities_data if comparison_type != "zones" else [],
+        top_performers=top_performers
+    )
 
 
 @router.get("/health", response_model=HealthResponse)

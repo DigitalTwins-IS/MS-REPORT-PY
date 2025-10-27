@@ -161,6 +161,76 @@ class ExportRequest(BaseModel):
         }
 
 
+class SalesComparisonItem(BaseModel):
+    """Item de comparación de ventas por zona/ciudad"""
+    zone_id: int = Field(..., description="ID de la zona")
+    zone_name: str = Field(..., description="Nombre de la zona")
+    city_id: int = Field(..., description="ID de la ciudad")
+    city_name: str = Field(..., description="Nombre de la ciudad")
+    total_shopkeepers: int = Field(..., description="Total de tenderos asignados")
+    total_sellers: int = Field(..., description="Total de vendedores")
+    performance_score: float = Field(..., description="Score de desempeño (0-100)")
+    market_penetration: float = Field(..., description="Penetración de mercado (tenderos promedio)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "zone_id": 1,
+                "zone_name": "Norte",
+                "city_id": 1,
+                "city_name": "Bogotá",
+                "total_shopkeepers": 145,
+                "total_sellers": 5,
+                "performance_score": 85.5,
+                "market_penetration": 29.0
+            }
+        }
+
+
+class CitySalesComparisonItem(BaseModel):
+    """Item de comparación de ventas por ciudad"""
+    city_id: int = Field(..., description="ID de la ciudad")
+    city_name: str = Field(..., description="Nombre de la ciudad")
+    total_zones: int = Field(..., description="Total de zonas en la ciudad")
+    total_shopkeepers: int = Field(..., description="Total de tenderos asignados")
+    total_sellers: int = Field(..., description="Total de vendedores")
+    performance_score: float = Field(..., description="Score de desempeño (0-100)")
+    market_penetration: float = Field(..., description="Penetración de mercado (tenderos promedio)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "city_id": 1,
+                "city_name": "Bogotá",
+                "total_zones": 3,
+                "total_shopkeepers": 320,
+                "total_sellers": 12,
+                "performance_score": 88.5,
+                "market_penetration": 26.67
+            }
+        }
+
+
+class SalesComparisonResponse(BaseModel):
+    """Respuesta de comparación de ventas por zonas y ciudades"""
+    report_date: datetime = Field(..., description="Fecha del reporte")
+    comparison_type: str = Field(..., description="Tipo de comparación (zones, cities)")
+    zones: List[SalesComparisonItem] = Field(default_factory=list, description="Comparación por zona")
+    cities: List[CitySalesComparisonItem] = Field(default_factory=list, description="Comparación por ciudad")
+    top_performers: List[SalesComparisonItem] = Field(default_factory=list, description="Áreas de mejor desempeño")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "report_date": "2025-10-02T00:00:00Z",
+                "comparison_type": "zones",
+                "zones": [],
+                "cities": [],
+                "top_performers": []
+            }
+        }
+
+
 class HealthResponse(BaseModel):
     """Health check response"""
     status: str = Field(..., description="Estado del servicio")
