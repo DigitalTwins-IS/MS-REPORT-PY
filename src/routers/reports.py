@@ -318,6 +318,12 @@ async def get_sales_comparison(
     - Score de desempeño calculado
     """
     token = authorization.replace("Bearer ", "") if authorization else None
+    allowed_types = {"zones", "cities", "both"}
+    if comparison_type not in allowed_types:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"comparison_type debe ser uno de {', '.join(sorted(allowed_types))}"
+        )
     
     # Obtener datos de los microservicios
     cities = await ms_client.get_all_cities()
@@ -407,20 +413,36 @@ async def get_sales_comparison(
             market_penetration=market_penetration
         ))
     
-    # Identificar top performers (top 3)
+    # Identificar top performers (top 3 por tipo)
     sorted_zones = sorted(zones_data, key=lambda x: x.performance_score, reverse=True)
-    top_performers = sorted_zones[:3] if len(sorted_zones) >= 3 else sorted_zones
+    top_zones = sorted_zones[:3]
+    sorted_cities = sorted(cities_data, key=lambda x: x.performance_score, reverse=True)
+    top_cities = sorted_cities[:3]
     
     # Determinar tipo de datos a retornar
-    if comparison_type == "cities":
-        zones_data = []
+    if comparison_type == "zones":
+        response_zones = zones_data
+        response_cities = []
+        response_top_zones = top_zones
+        response_top_cities = []
+    elif comparison_type == "cities":
+        response_zones = []
+        response_cities = cities_data
+        response_top_zones = []
+        response_top_cities = top_cities
+    else:
+        response_zones = zones_data
+        response_cities = cities_data
+        response_top_zones = top_zones
+        response_top_cities = top_cities
     
     return SalesComparisonResponse(
         report_date=datetime.now(),
         comparison_type=comparison_type,
-        zones=zones_data,
-        cities=cities_data if comparison_type != "zones" else [],
-        top_performers=top_performers
+        zones=response_zones,
+        cities=response_cities,
+        top_zones=response_top_zones,
+        top_cities=response_top_cities
     )
 
 
