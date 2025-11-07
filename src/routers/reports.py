@@ -191,7 +191,7 @@ async def get_zone_statistics(
         shopkeepers_count=assigned_count + unassigned_count,
         assigned_shopkeepers=assigned_count,
         unassigned_shopkeepers=unassigned_count,
-        avg_shopkeepers_per_seller=round(avg_per_seller, 2)
+        avg_shopkeepers_per_seller=round(avg_per_seller)
     )
 
 
@@ -238,7 +238,7 @@ async def get_system_metrics(
         total_shopkeepers=total_shopkeepers,
         active_assignments=active_assignments,
         unassigned_shopkeepers=unassigned_count,
-        avg_shopkeepers_per_seller=round(avg_shopkeepers, 2),
+        avg_shopkeepers_per_seller=round(avg_shopkeepers),
         system_health=health_status
     )
 
