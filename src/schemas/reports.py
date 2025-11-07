@@ -214,19 +214,21 @@ class CitySalesComparisonItem(BaseModel):
 class SalesComparisonResponse(BaseModel):
     """Respuesta de comparación de ventas por zonas y ciudades"""
     report_date: datetime = Field(..., description="Fecha del reporte")
-    comparison_type: str = Field(..., description="Tipo de comparación (zones, cities)")
+    comparison_type: str = Field(..., description="Tipo de comparación (zones, cities, both)")
     zones: List[SalesComparisonItem] = Field(default_factory=list, description="Comparación por zona")
     cities: List[CitySalesComparisonItem] = Field(default_factory=list, description="Comparación por ciudad")
-    top_performers: List[SalesComparisonItem] = Field(default_factory=list, description="Áreas de mejor desempeño")
+    top_zones: List[SalesComparisonItem] = Field(default_factory=list, description="Zonas con mejor desempeño")
+    top_cities: List[CitySalesComparisonItem] = Field(default_factory=list, description="Ciudades con mejor desempeño")
     
     class Config:
         json_schema_extra = {
             "example": {
                 "report_date": "2025-10-02T00:00:00Z",
-                "comparison_type": "zones",
+                "comparison_type": "both",
                 "zones": [],
                 "cities": [],
-                "top_performers": []
+                "top_zones": [],
+                "top_cities": []
             }
         }
 
