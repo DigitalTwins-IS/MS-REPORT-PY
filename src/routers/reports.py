@@ -4,10 +4,11 @@ Router de Reportes y Análisis
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta, date
 import io
 import csv
 import json
+from random import Random
 
 from ..schemas import (
     CoverageReportResponse,
@@ -20,12 +21,65 @@ from ..schemas import (
     HealthResponse,
     SalesComparisonResponse,
     SalesComparisonItem,
-    CitySalesComparisonItem
+    CitySalesComparisonItem,
+    SalesHistoryResponse,
+    SaleRecord,
+    SalesSummary
 )
 from ..utils import get_current_user, ms_client
 from ..config import settings
 
 router = APIRouter()
+
+
+MOCK_PRODUCTS = [
+    {"name": "Arroz Premium 1Kg", "category": "Granos", "price": 5800.0, "max_quantity": 18},
+    {"name": "Aceite Vegetal 1L", "category": "Aceites", "price": 9200.0, "max_quantity": 12},
+    {"name": "Bebida Energética 500ml", "category": "Bebidas", "price": 4500.0, "max_quantity": 24},
+    {"name": "Galletas Integrales 12u", "category": "Snacks", "price": 7200.0, "max_quantity": 15},
+    {"name": "Detergente Líquido 2L", "category": "Aseo", "price": 11800.0, "max_quantity": 8},
+    {"name": "Papel Higiénico 12 rollos", "category": "Aseo", "price": 16300.0, "max_quantity": 6},
+    {"name": "Café Molido 500g", "category": "Bebidas", "price": 9800.0, "max_quantity": 10},
+    {"name": "Azúcar Refinada 1Kg", "category": "Granos", "price": 4600.0, "max_quantity": 20}
+]
+
+MOCK_STATUSES = ["Completada", "Pagada", "Pendiente"]
+
+
+def _generate_mock_sales(shopkeeper_id: int, rng: Random) -> list[dict]:
+    """Genera ventas determinísticas basadas en el ID del tendero."""
+    base_datetime = datetime.utcnow().replace(microsecond=0)
+    num_records = rng.randint(6, 14)
+    
+    sales = []
+    for index in range(num_records):
+        product = rng.choice(MOCK_PRODUCTS)
+        quantity = rng.randint(1, product["max_quantity"])
+        
+        days_ago = rng.randint(0, 60)
+        hours_offset = rng.randint(0, 23)
+        sold_at = base_datetime - timedelta(days=days_ago, hours=hours_offset)
+        
+        sale_id = shopkeeper_id * 1000 + index + 1
+        invoice_number = f"INV-{shopkeeper_id:03d}-{sold_at.strftime('%Y%m%d')}-{index + 1:02d}"
+        status = rng.choices(MOCK_STATUSES, weights=[0.7, 0.2, 0.1], k=1)[0]
+        
+        sales.append(
+            {
+                "sale_id": sale_id,
+                "invoice_number": invoice_number,
+                "product_name": product["name"],
+                "category": product["category"],
+                "quantity": quantity,
+                "unit_price": product["price"],
+                "total_amount": round(quantity * product["price"], 2),
+                "sold_at": sold_at,
+                "status": status if status != "Pagada" else "Completada"
+            }
+        )
+    
+    sales.sort(key=lambda item: item["sold_at"], reverse=True)
+    return sales
 
 
 @router.get("/coverage", response_model=CoverageReportResponse)
@@ -443,6 +497,97 @@ async def get_sales_comparison(
         cities=response_cities,
         top_zones=response_top_zones,
         top_cities=response_top_cities
+    )
+
+
+@router.get(
+    "/sales-history/shopkeepers/{shopkeeper_id}",
+    response_model=SalesHistoryResponse,
+    summary="Historial de ventas por tendero",
+    description="Retorna el historial de ventas y métricas agregadas para un tendero específico."
+)
+async def get_sales_history(
+    shopkeeper_id: int,
+    start_date: date = Query(
+        None,
+        description="Fecha inicial del rango (YYYY-MM-DD). Por defecto últimos 30 días."
+    ),
+    end_date: date = Query(
+        None,
+        description="Fecha final del rango (YYYY-MM-DD)."
+    ),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    token = authorization.replace("Bearer ", "") if authorization else None
+    
+    date_end = end_date or datetime.utcnow().date()
+    date_start = start_date or (date_end - timedelta(days=30))
+    
+    if date_start > date_end:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="La fecha inicial no puede ser posterior a la fecha final."
+        )
+    
+    # Obtener información del tendero y su vendedor
+    shopkeeper = await ms_client.get_shopkeeper_by_id(shopkeeper_id, token=token)
+    if not shopkeeper:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Tendero no encontrado.")
+    
+    seller_info = None
+    seller_id = shopkeeper.get("seller_id")
+    if seller_id:
+        seller_info = await ms_client.get_seller_by_id(seller_id, token=token)
+    
+    rng = Random(shopkeeper_id)
+    generated_sales = _generate_mock_sales(shopkeeper_id, rng)
+    
+    filtered_sales = [
+        sale for sale in generated_sales
+        if date_start <= sale["sold_at"].date() <= date_end
+    ]
+    
+    total_records = len(filtered_sales)
+    total_units = sum(sale["quantity"] for sale in filtered_sales)
+    total_amount = round(sum(sale["total_amount"] for sale in filtered_sales), 2)
+    average_ticket = round(total_amount / total_records, 2) if total_records else 0.0
+    
+    sales_payload = [
+        SaleRecord(
+            sale_id=sale["sale_id"],
+            invoice_number=sale["invoice_number"],
+            product_name=sale["product_name"],
+            category=sale["category"],
+            quantity=sale["quantity"],
+            unit_price=sale["unit_price"],
+            total_amount=sale["total_amount"],
+            sold_at=sale["sold_at"],
+            status=sale["status"]
+        )
+        for sale in filtered_sales
+    ]
+    
+    return SalesHistoryResponse(
+        report_generated_at=datetime.utcnow(),
+        shopkeeper_id=shopkeeper_id,
+        shopkeeper_name=shopkeeper.get("name"),
+        shopkeeper_business_name=shopkeeper.get("business_name"),
+        seller_id=seller_info.get("id") if seller_info else shopkeeper.get("seller_id"),
+        seller_name=(
+            seller_info.get("name")
+            if seller_info
+            else shopkeeper.get("seller_name")
+        ),
+        range_start=date_start,
+        range_end=date_end,
+        summary=SalesSummary(
+            total_records=total_records,
+            total_units=total_units,
+            total_amount=total_amount,
+            average_ticket=average_ticket
+        ),
+        sales=sales_payload
     )
 
 

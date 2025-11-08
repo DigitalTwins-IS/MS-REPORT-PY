@@ -3,7 +3,7 @@ Schemas para Reportes y Análisis
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 
 
 class CoverageByZoneItem(BaseModel):
@@ -229,6 +229,87 @@ class SalesComparisonResponse(BaseModel):
                 "cities": [],
                 "top_zones": [],
                 "top_cities": []
+            }
+        }
+
+
+class SaleRecord(BaseModel):
+    """Detalle individual de una venta"""
+    sale_id: int = Field(..., description="Identificador interno de la venta")
+    invoice_number: str = Field(..., description="Número de factura o referencia")
+    product_name: str = Field(..., description="Nombre del producto vendido")
+    category: Optional[str] = Field(None, description="Categoría del producto")
+    quantity: int = Field(..., description="Cantidad de unidades vendidas")
+    unit_price: float = Field(..., description="Precio unitario en COP")
+    total_amount: float = Field(..., description="Valor total de la venta en COP")
+    sold_at: datetime = Field(..., description="Fecha y hora de la venta")
+    status: str = Field(..., description="Estado de la venta (Completada, Pendiente, etc.)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sale_id": 501,
+                "invoice_number": "INV-2025-0001",
+                "product_name": "Bebida Energética 500ml",
+                "category": "Bebidas",
+                "quantity": 12,
+                "unit_price": 4500.0,
+                "total_amount": 54000.0,
+                "sold_at": "2025-10-05T14:23:00Z",
+                "status": "Completada"
+            }
+        }
+
+
+class SalesSummary(BaseModel):
+    """Resumen agregado del historial de ventas"""
+    total_records: int = Field(..., description="Número total de ventas en el rango")
+    total_units: int = Field(..., description="Total de unidades vendidas")
+    total_amount: float = Field(..., description="Valor total vendido en COP")
+    average_ticket: float = Field(..., description="Ticket promedio por transacción en COP")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total_records": 18,
+                "total_units": 240,
+                "total_amount": 2680000.0,
+                "average_ticket": 148888.89
+            }
+        }
+
+
+class SalesHistoryResponse(BaseModel):
+    """Respuesta con el historial de ventas de un tendero"""
+    report_generated_at: datetime = Field(..., description="Fecha y hora de generación del reporte")
+    shopkeeper_id: int = Field(..., description="ID del tendero")
+    shopkeeper_name: Optional[str] = Field(None, description="Nombre del tendero")
+    shopkeeper_business_name: Optional[str] = Field(None, description="Nombre comercial del tendero")
+    seller_id: Optional[int] = Field(None, description="ID del vendedor asignado")
+    seller_name: Optional[str] = Field(None, description="Nombre del vendedor asignado")
+    range_start: date = Field(..., description="Fecha inicial del filtro aplicado")
+    range_end: date = Field(..., description="Fecha final del filtro aplicado")
+    summary: SalesSummary = Field(..., description="Resumen agregado del historial")
+    sales: List[SaleRecord] = Field(default_factory=list, description="Listado de ventas")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "report_generated_at": "2025-10-05T18:30:00Z",
+                "shopkeeper_id": 12,
+                "shopkeeper_name": "Supermercado El Ahorro",
+                "shopkeeper_business_name": "Supermercado El Ahorro",
+                "seller_id": 4,
+                "seller_name": "Juan Pérez",
+                "range_start": "2025-09-05",
+                "range_end": "2025-10-05",
+                "summary": {
+                    "total_records": 18,
+                    "total_units": 240,
+                    "total_amount": 2680000.0,
+                    "average_ticket": 148888.89
+                },
+                "sales": []
             }
         }
 
