@@ -15,7 +15,11 @@ from .reports import (
     SalesComparisonResponse,
     SaleRecord,
     SalesSummary,
-    SalesHistoryResponse
+    SalesHistoryResponse,
+    PeriodInfo,
+    SellerComplianceItem,
+    ComplianceSummary,
+    VisitsComplianceResponse
 )
 
 __all__ = [
@@ -32,6 +36,10 @@ __all__ = [
     "SalesComparisonResponse",
     "SaleRecord",
     "SalesSummary",
-    "SalesHistoryResponse"
+    "SalesHistoryResponse",
+    "PeriodInfo",
+    "SellerComplianceItem",
+    "ComplianceSummary",
+    "VisitsComplianceResponse"
 ]
 

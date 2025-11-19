@@ -24,7 +24,11 @@ from ..schemas import (
     CitySalesComparisonItem,
     SalesHistoryResponse,
     SaleRecord,
-    SalesSummary
+    SalesSummary,
+    VisitsComplianceResponse,
+    SellerComplianceItem,
+    ComplianceSummary,
+    PeriodInfo
 )
 from ..utils import get_current_user, ms_client
 from ..config import settings
@@ -588,6 +592,151 @@ async def get_sales_history(
             average_ticket=average_ticket
         ),
         sales=sales_payload
+    )
+
+
+@router.get("/visits-compliance", response_model=VisitsComplianceResponse)
+async def get_visits_compliance(
+    seller_id: Optional[int] = Query(None, description="Filtrar por vendedor específico"),
+    zone_id: Optional[int] = Query(None, description="Filtrar por zona geográfica"),
+    start_date: Optional[datetime] = Query(None, description="Fecha de inicio del período"),
+    end_date: Optional[datetime] = Query(None, description="Fecha de fin del período"),
+    sort_by: Optional[str] = Query("compliance_percentage", description="Campo para ordenar (compliance_percentage, seller_name, total_visits)"),
+    sort_order: Optional[str] = Query("desc", description="Orden (asc, desc)"),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    Reporte de cumplimiento de visitas por vendedor
+    HU15: Como administrador, quiero ver % de cumplimiento de visitas para evaluar desempeño de cada vendedor
+    
+    Calcula el porcentaje de cumplimiento basado en:
+    - Visitas completadas / (Visitas completadas + Visitas pendientes)
+    - Las visitas canceladas no se incluyen en el cálculo
+    """
+    # Validar permisos (solo ADMIN)
+    if current_user.get("role") != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los administradores pueden ver este reporte"
+        )
+    
+    # Extraer token del header de manera robusta
+    token = None
+    if authorization:
+        # Manejar tanto "Bearer token" como solo "token"
+        if authorization.startswith("Bearer "):
+            token = authorization.replace("Bearer ", "").strip()
+        else:
+            token = authorization.strip()
+    
+    # Obtener todos los vendedores (filtrados por zona si aplica)
+    sellers = await ms_client.get_all_sellers(zone_id=zone_id, token=token)
+    zones = await ms_client.get_all_zones()
+    
+    # Si se especifica un vendedor, filtrar
+    if seller_id:
+        sellers = [s for s in sellers if s["id"] == seller_id]
+    
+    # Obtener todas las visitas para los vendedores seleccionados
+    all_visits = []
+    for seller in sellers:
+        visits = await ms_client.get_visits(
+            seller_id=seller["id"],
+            start_date=start_date,
+            end_date=end_date,
+            token=token
+        )
+        all_visits.extend(visits)
+    
+    # Procesar datos por vendedor
+    sellers_compliance = []
+    total_visits_all = 0
+    total_completed_all = 0
+    total_pending_all = 0
+    total_cancelled_all = 0
+    compliance_percentages = []
+    
+    for seller in sellers:
+        # Filtrar visitas de este vendedor
+        seller_visits = [v for v in all_visits if v.get("seller_id") == seller["id"]]
+        
+        # Contar por estado
+        completed = len([v for v in seller_visits if v.get("status") == "completed"])
+        pending = len([v for v in seller_visits if v.get("status") == "pending"])
+        cancelled = len([v for v in seller_visits if v.get("status") == "cancelled"])
+        
+        # Total de visitas programadas (completed + pending, sin cancelled)
+        total_programmed = completed + pending
+        
+        # Calcular porcentaje de cumplimiento
+        if total_programmed > 0:
+            compliance_percentage = (completed / total_programmed) * 100
+        else:
+            compliance_percentage = 0.0
+        
+        # Obtener nombre de zona
+        zone_name = next(
+            (z["name"] for z in zones if z["id"] == seller.get("zone_id")),
+            "Sin zona"
+        )
+        
+        sellers_compliance.append(SellerComplianceItem(
+            seller_id=seller["id"],
+            seller_name=seller["name"],
+            zone_id=seller.get("zone_id"),
+            zone_name=zone_name,
+            total_visits=total_programmed,
+            completed_visits=completed,
+            pending_visits=pending,
+            cancelled_visits=cancelled,
+            compliance_percentage=round(compliance_percentage, 2),
+            period=PeriodInfo(
+                start_date=start_date,
+                end_date=end_date
+            ) if start_date or end_date else None
+        ))
+        
+        # Acumular para resumen
+        total_visits_all += total_programmed
+        total_completed_all += completed
+        total_pending_all += pending
+        total_cancelled_all += cancelled
+        if total_programmed > 0:
+            compliance_percentages.append(compliance_percentage)
+    
+    # Ordenar resultados
+    reverse_order = sort_order == "desc"
+    if sort_by == "compliance_percentage":
+        sellers_compliance.sort(key=lambda x: x.compliance_percentage, reverse=reverse_order)
+    elif sort_by == "seller_name":
+        sellers_compliance.sort(key=lambda x: x.seller_name, reverse=reverse_order)
+    elif sort_by == "total_visits":
+        sellers_compliance.sort(key=lambda x: x.total_visits, reverse=reverse_order)
+    
+    # Calcular promedio de cumplimiento
+    average_compliance = sum(compliance_percentages) / len(compliance_percentages) if compliance_percentages else 0.0
+    
+    # Crear resumen
+    summary = ComplianceSummary(
+        total_sellers=len(sellers_compliance),
+        average_compliance=round(average_compliance, 2),
+        total_visits=total_visits_all,
+        total_completed=total_completed_all,
+        total_pending=total_pending_all,
+        total_cancelled=total_cancelled_all
+    )
+    
+    # Crear período
+    period = PeriodInfo(
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    return VisitsComplianceResponse(
+        sellers_compliance=sellers_compliance,
+        summary=summary,
+        period=period
     )
 
 

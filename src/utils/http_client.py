@@ -3,6 +3,7 @@ Cliente HTTP para comunicarse con otros microservicios
 """
 import httpx
 from typing import Optional, List
+from datetime import datetime
 from fastapi import HTTPException, status
 from ..config import settings
 
@@ -169,6 +170,60 @@ class MicroserviceClient:
                 
         except httpx.RequestError:
             return "disconnected"
+    
+    async def get_visits(
+        self,
+        seller_id: Optional[int] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        status_filter: Optional[str] = None,
+        token: str = None
+    ) -> List[dict]:
+        """Obtiene visitas desde MS-USER-PY"""
+        try:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            params = {}
+            
+            if seller_id:
+                params["seller_id"] = seller_id
+            if start_date:
+                params["start_date"] = start_date.isoformat()
+            if end_date:
+                params["end_date"] = end_date.isoformat()
+            if status_filter:
+                params["status_filter"] = status_filter
+            
+            # Obtener todas las visitas (sin límite para el reporte)
+            params["limit"] = 1000
+            params["skip"] = 0
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.ms_user_url}/api/v1/users/visits",
+                    params=params,
+                    headers=headers
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    # Si la respuesta tiene la estructura VisitListResponse
+                    if isinstance(data, dict) and "visits" in data:
+                        return data["visits"]
+                    # Si es una lista directa
+                    elif isinstance(data, list):
+                        return data
+                    return []
+                else:
+                    # Log del error para debugging
+                    print(f"Error obteniendo visitas: {response.status_code} - {response.text}")
+                    return []
+                
+        except httpx.RequestError as e:
+            print(f"Error de conexión obteniendo visitas: {str(e)}")
+            return []
+        except Exception as e:
+            print(f"Error inesperado obteniendo visitas: {str(e)}")
+            return []
 
 
 # Instancia global del cliente

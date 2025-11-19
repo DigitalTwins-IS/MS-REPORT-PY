@@ -335,3 +335,97 @@ class HealthResponse(BaseModel):
             }
         }
 
+
+class PeriodInfo(BaseModel):
+    """Información del período de análisis"""
+    start_date: Optional[datetime] = Field(None, description="Fecha de inicio")
+    end_date: Optional[datetime] = Field(None, description="Fecha de fin")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "start_date": "2025-01-01T00:00:00Z",
+                "end_date": "2025-01-31T23:59:59Z"
+            }
+        }
+
+
+class SellerComplianceItem(BaseModel):
+    """Item de cumplimiento de visitas por vendedor"""
+    seller_id: int = Field(..., description="ID del vendedor")
+    seller_name: str = Field(..., description="Nombre del vendedor")
+    zone_id: Optional[int] = Field(None, description="ID de la zona")
+    zone_name: Optional[str] = Field(None, description="Nombre de la zona")
+    total_visits: int = Field(..., description="Total de visitas programadas (pending + completed)")
+    completed_visits: int = Field(..., description="Visitas completadas")
+    pending_visits: int = Field(..., description="Visitas pendientes")
+    cancelled_visits: int = Field(..., description="Visitas canceladas")
+    compliance_percentage: float = Field(..., description="Porcentaje de cumplimiento")
+    period: Optional[PeriodInfo] = Field(None, description="Período de análisis")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "seller_id": 1,
+                "seller_name": "Juan Pérez",
+                "zone_id": 1,
+                "zone_name": "Zona Norte",
+                "total_visits": 50,
+                "completed_visits": 45,
+                "pending_visits": 3,
+                "cancelled_visits": 2,
+                "compliance_percentage": 90.0,
+                "period": {
+                    "start_date": "2025-01-01T00:00:00Z",
+                    "end_date": "2025-01-31T23:59:59Z"
+                }
+            }
+        }
+
+
+class ComplianceSummary(BaseModel):
+    """Resumen del reporte de cumplimiento"""
+    total_sellers: int = Field(..., description="Total de vendedores evaluados")
+    average_compliance: float = Field(..., description="Promedio de cumplimiento")
+    total_visits: int = Field(..., description="Total de visitas programadas")
+    total_completed: int = Field(..., description="Total de visitas completadas")
+    total_pending: int = Field(..., description="Total de visitas pendientes")
+    total_cancelled: int = Field(..., description="Total de visitas canceladas")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total_sellers": 10,
+                "average_compliance": 85.5,
+                "total_visits": 500,
+                "total_completed": 425,
+                "total_pending": 50,
+                "total_cancelled": 25
+            }
+        }
+
+
+class VisitsComplianceResponse(BaseModel):
+    """Respuesta del reporte de cumplimiento de visitas"""
+    sellers_compliance: List[SellerComplianceItem] = Field(..., description="Lista de cumplimiento por vendedor")
+    summary: ComplianceSummary = Field(..., description="Resumen del reporte")
+    period: PeriodInfo = Field(..., description="Período de análisis")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sellers_compliance": [],
+                "summary": {
+                    "total_sellers": 10,
+                    "average_compliance": 85.5,
+                    "total_visits": 500,
+                    "total_completed": 425,
+                    "total_pending": 50,
+                    "total_cancelled": 25
+                },
+                "period": {
+                    "start_date": "2025-01-01T00:00:00Z",
+                    "end_date": "2025-01-31T23:59:59Z"
+                }
+            }
+        }
