@@ -157,6 +157,21 @@ class MicroserviceClient:
         except httpx.RequestError:
             return None
     
+    async def get_inventory_by_shopkeeper(self, shopkeeper_id: int, token: str = None) -> List[dict]:
+        """Obtiene el inventario completo de un tendero"""
+        try:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.ms_user_url}/api/v1/users/inventory/{shopkeeper_id}",
+                    headers=headers
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return []
+        except httpx.RequestError:
+            return []
+    
     async def check_service_health(self, service_url: str) -> str:
         """Verifica el estado de un microservicio"""
         try:

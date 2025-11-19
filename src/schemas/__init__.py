@@ -13,6 +13,8 @@ from .reports import (
     SalesComparisonItem,
     CitySalesComparisonItem,
     SalesComparisonResponse,
+    TopProductItem,
+    TopProductsResponse,
     SaleRecord,
     SalesSummary,
     SalesHistoryResponse
@@ -30,6 +32,8 @@ __all__ = [
     "SalesComparisonItem",
     "CitySalesComparisonItem",
     "SalesComparisonResponse",
+    "TopProductItem",
+    "TopProductsResponse",
     "SaleRecord",
     "SalesSummary",
     "SalesHistoryResponse"
