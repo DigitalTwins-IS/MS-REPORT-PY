@@ -28,7 +28,9 @@ from ..schemas import (
     VisitsComplianceResponse,
     SellerComplianceItem,
     ComplianceSummary,
-    PeriodInfo
+    PeriodInfo,
+    TopProductItem,
+    TopProductsResponse
 )
 from ..utils import get_current_user, ms_client
 from ..config import settings
@@ -204,6 +206,151 @@ async def get_sellers_performance(
         total_sellers=len(sellers),
         avg_shopkeepers_per_seller=round(avg_shopkeepers, 2),
         sellers=sellers_data
+    )
+
+
+@router.get("/sales/top-products", response_model=TopProductsResponse)
+async def get_top_products_by_zone(
+    limit: int = Query(3, ge=1, le=10, description="Cantidad de productos en el ranking"),
+    seller_id: Optional[int] = Query(None, description="Filtrar por vendedor y su zona"),
+    zone_id: Optional[int] = Query(None, description="Zona específica"),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    Ranking de productos con mayor rotación por zona (HU10)
+
+    Se determina la demanda a partir de la necesidad de reposición
+    agregada en los inventarios de los tenderos de la zona.
+    """
+    token = authorization.replace("Bearer ", "") if authorization else None
+    
+    if not zone_id and not seller_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Debes proporcionar seller_id o zone_id para generar el ranking"
+        )
+    
+    seller_info = None
+    seller_name = None
+    if seller_id:
+        seller_info = await ms_client.get_seller_by_id(seller_id, token=token)
+        if not seller_info:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Vendedor no encontrado")
+        seller_name = seller_info.get("name")
+        if not zone_id:
+            zone_id = seller_info.get("zone_id")
+    
+    if not zone_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No se pudo determinar la zona del vendedor"
+        )
+    
+    zone = await ms_client.get_zone_by_id(zone_id)
+    if not zone:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Zona no encontrada")
+    
+    # Obtener todos los vendedores de la zona
+    zone_sellers = await ms_client.get_all_sellers(zone_id=zone_id, token=token)
+    if not zone_sellers and seller_info:
+        zone_sellers = [seller_info]
+    
+    shopkeeper_ids = set()
+    for zone_seller in zone_sellers:
+        sid = zone_seller.get("id")
+        if not sid:
+            continue
+        shopkeepers = await ms_client.get_all_shopkeepers(seller_id=sid, token=token)
+        for shopkeeper in shopkeepers:
+            if shopkeeper.get("id"):
+                shopkeeper_ids.add(shopkeeper["id"])
+    
+    total_shopkeepers = len(shopkeeper_ids)
+    product_stats = {}
+    
+    for shopkeeper_id in shopkeeper_ids:
+        inventory_items = await ms_client.get_inventory_by_shopkeeper(shopkeeper_id, token=token)
+        for item in inventory_items:
+            product_id = item.get("product_id")
+            if not product_id:
+                continue
+            
+            stock = float(item.get("stock", item.get("current_stock", 0)) or 0)
+            max_stock = float(item.get("max_stock") or 0)
+            min_stock = float(item.get("min_stock") or 0)
+            price = float(item.get("price", item.get("unit_price", 0)) or 0)
+            units_needed = max(0.0, max_stock - stock)
+            
+            stats = product_stats.setdefault(product_id, {
+                "product_name": item.get("product_name") or f"Producto {product_id}",
+                "category": item.get("category") or item.get("product_category") or "Sin categoría",
+                "total_units_needed": 0.0,
+                "total_stock": 0.0,
+                "total_price": 0.0,
+                "shopkeepers": 0,
+                "low_stock": 0,
+            })
+            
+            # Actualizar nombre/categoría si llegan datos más completos
+            if item.get("product_name"):
+                stats["product_name"] = item["product_name"]
+            if item.get("category") or item.get("product_category"):
+                stats["category"] = item.get("category") or item.get("product_category")
+            
+            stats["total_units_needed"] += units_needed
+            stats["total_stock"] += stock
+            stats["total_price"] += price
+            stats["shopkeepers"] += 1
+            if min_stock > 0 and stock < min_stock:
+                stats["low_stock"] += 1
+    
+    total_products = len(product_stats)
+    if total_products == 0:
+        return TopProductsResponse(
+            zone_id=zone_id,
+            zone_name=zone.get("name", f"Zona {zone_id}"),
+            seller_id=seller_id,
+            seller_name=seller_name,
+            total_shopkeepers=total_shopkeepers,
+            total_products=0,
+            generated_at=datetime.now(),
+            items=[]
+        )
+    
+    sorted_products = sorted(
+        product_stats.items(),
+        key=lambda item: (
+            -item[1]["total_units_needed"],
+            -item[1]["low_stock"],
+            -item[1]["total_stock"]
+        )
+    )
+    
+    items: List[TopProductItem] = []
+    for rank, (product_id, stats) in enumerate(sorted_products[:limit], start=1):
+        avg_price = stats["total_price"] / stats["shopkeepers"] if stats["shopkeepers"] else 0.0
+        items.append(TopProductItem(
+            rank=rank,
+            product_id=product_id,
+            product_name=stats["product_name"],
+            category=stats["category"],
+            total_units_needed=round(stats["total_units_needed"], 2),
+            total_current_stock=round(stats["total_stock"], 2),
+            avg_unit_price=round(avg_price, 2),
+            shopkeepers_count=stats["shopkeepers"],
+            low_stock_shopkeepers=stats["low_stock"]
+        ))
+    
+    return TopProductsResponse(
+        zone_id=zone_id,
+        zone_name=zone.get("name", f"Zona {zone_id}"),
+        seller_id=seller_id,
+        seller_name=seller_name,
+        total_shopkeepers=total_shopkeepers,
+        total_products=total_products,
+        generated_at=datetime.now(),
+        items=items
     )
 
 

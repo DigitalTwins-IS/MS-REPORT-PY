@@ -233,6 +233,60 @@ class SalesComparisonResponse(BaseModel):
         }
 
 
+class TopProductItem(BaseModel):
+    """Producto destacado por ventas en la zona"""
+    rank: int = Field(..., description="Posición en el ranking")
+    product_id: int = Field(..., description="ID del producto")
+    product_name: str = Field(..., description="Nombre del producto")
+    category: Optional[str] = Field(None, description="Categoría del producto")
+    total_units_needed: float = Field(..., description="Unidades requeridas o faltantes (indicador de rotación)")
+    total_current_stock: float = Field(..., description="Stock actual agregado")
+    avg_unit_price: float = Field(..., description="Precio promedio del producto")
+    shopkeepers_count: int = Field(..., description="Cantidad de tenderos que venden el producto")
+    low_stock_shopkeepers: int = Field(..., description="Tenderos con stock por debajo del mínimo")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "rank": 1,
+                "product_id": 101,
+                "product_name": "Bebida Energética 500ml",
+                "category": "Bebidas",
+                "total_units_needed": 120.5,
+                "total_current_stock": 80.0,
+                "avg_unit_price": 4500.0,
+                "shopkeepers_count": 12,
+                "low_stock_shopkeepers": 5
+            }
+        }
+
+
+class TopProductsResponse(BaseModel):
+    """Respuesta con los productos más vendidos por zona"""
+    zone_id: int = Field(..., description="ID de la zona")
+    zone_name: str = Field(..., description="Nombre de la zona")
+    seller_id: Optional[int] = Field(None, description="ID del vendedor solicitante")
+    seller_name: Optional[str] = Field(None, description="Nombre del vendedor solicitante")
+    total_shopkeepers: int = Field(..., description="Total de tenderos considerados")
+    total_products: int = Field(..., description="Total de productos analizados")
+    generated_at: datetime = Field(..., description="Fecha de generación del reporte")
+    items: List[TopProductItem] = Field(default_factory=list, description="Listado de productos destacados")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "zone_id": 3,
+                "zone_name": "Zona Norte",
+                "seller_id": 5,
+                "seller_name": "Laura Martínez",
+                "total_shopkeepers": 18,
+                "total_products": 45,
+                "generated_at": "2025-11-19T12:00:00Z",
+                "items": []
+            }
+        }
+
+
 class SaleRecord(BaseModel):
     """Detalle individual de una venta"""
     sale_id: int = Field(..., description="Identificador interno de la venta")
