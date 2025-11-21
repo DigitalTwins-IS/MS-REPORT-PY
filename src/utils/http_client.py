@@ -187,36 +187,68 @@ class MicroserviceClient:
             if seller_id:
                 params["seller_id"] = seller_id
             if start_date:
-                params["start_date"] = start_date.isoformat()
+                # Asegurar que la fecha tenga formato ISO con timezone
+                if isinstance(start_date, datetime):
+                    params["start_date"] = start_date.isoformat()
+                else:
+                    params["start_date"] = str(start_date)
             if end_date:
-                params["end_date"] = end_date.isoformat()
+                # Asegurar que la fecha tenga formato ISO con timezone
+                if isinstance(end_date, datetime):
+                    params["end_date"] = end_date.isoformat()
+                else:
+                    params["end_date"] = str(end_date)
             if status_filter:
                 params["status_filter"] = status_filter
             
-            # Obtener todas las visitas (sin límite para el reporte)
-            params["limit"] = 1000
-            params["skip"] = 0
+            # Obtener todas las visitas con paginación si es necesario
+            all_visits = []
+            skip = 0
+            limit = 1000
+            max_iterations = 100  # Prevenir loops infinitos
             
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(
-                    f"{self.ms_user_url}/api/v1/users/visits",
-                    params=params,
-                    headers=headers
-                )
+                for iteration in range(max_iterations):
+                    params_page = params.copy()
+                    params_page["limit"] = limit
+                    params_page["skip"] = skip
+                    
+                    response = await client.get(
+                        f"{self.ms_user_url}/api/v1/users/visits",
+                        params=params_page,
+                        headers=headers
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        # Si la respuesta tiene la estructura VisitListResponse
+                        if isinstance(data, dict) and "visits" in data:
+                            visits_batch = data["visits"]
+                            total = data.get("total", len(visits_batch))
+                            all_visits.extend(visits_batch)
+                            
+                            # Si obtuvimos menos visitas que el límite, ya terminamos
+                            if len(visits_batch) < limit or len(all_visits) >= total:
+                                break
+                            
+                            skip += limit
+                        # Si es una lista directa
+                        elif isinstance(data, list):
+                            all_visits.extend(data)
+                            # Si obtuvimos menos que el límite, ya terminamos
+                            if len(data) < limit:
+                                break
+                            skip += limit
+                        else:
+                            break
+                    else:
+                        # Log del error para debugging
+                        print(f"Error obteniendo visitas: {response.status_code} - {response.text}")
+                        break
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    # Si la respuesta tiene la estructura VisitListResponse
-                    if isinstance(data, dict) and "visits" in data:
-                        return data["visits"]
-                    # Si es una lista directa
-                    elif isinstance(data, list):
-                        return data
-                    return []
-                else:
-                    # Log del error para debugging
-                    print(f"Error obteniendo visitas: {response.status_code} - {response.text}")
-                    return []
+                # Log para debugging
+                print(f"Obtenidas {len(all_visits)} visitas totales para seller_id={seller_id}")
+                return all_visits
                 
         except httpx.RequestError as e:
             print(f"Error de conexión obteniendo visitas: {str(e)}")
