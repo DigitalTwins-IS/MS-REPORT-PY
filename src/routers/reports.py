@@ -26,7 +26,9 @@ from ..schemas import (
     SaleRecord,
     SalesSummary,
     TopProductItem,
-    TopProductsResponse
+    TopProductsResponse,
+    SellerAggregatedSalesResponse,
+    ShopkeeperSalesSummary
 )
 from ..utils import get_current_user, ms_client
 from ..config import settings
@@ -735,6 +737,143 @@ async def get_sales_history(
             average_ticket=average_ticket
         ),
         sales=sales_payload
+    )
+
+
+@router.get(
+    "/sales-aggregated/sellers/{seller_id}",
+    response_model=SellerAggregatedSalesResponse,
+    summary="Reporte agregado de ventas por vendedor",
+    description="Retorna el reporte agregado de ventas de todos los tenderos asignados a un vendedor específico."
+)
+async def get_seller_aggregated_sales(
+    seller_id: int,
+    start_date: date = Query(
+        None,
+        description="Fecha inicial del rango (YYYY-MM-DD). Por defecto últimos 30 días."
+    ),
+    end_date: date = Query(
+        None,
+        description="Fecha final del rango (YYYY-MM-DD)."
+    ),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    Reporte agregado de ventas de un vendedor
+    
+    Agrega las ventas de todos los tenderos asignados al vendedor
+    para medir su rendimiento general.
+    """
+    token = authorization.replace("Bearer ", "") if authorization else None
+    
+    date_end = end_date or datetime.utcnow().date()
+    date_start = start_date or (date_end - timedelta(days=30))
+    
+    if date_start > date_end:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="La fecha inicial no puede ser posterior a la fecha final."
+        )
+    
+    # Obtener información del vendedor
+    seller = await ms_client.get_seller_by_id(seller_id, token=token)
+    if not seller:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Vendedor no encontrado.")
+    
+    # Obtener zona del vendedor
+    zone_name = None
+    zone_id = seller.get("zone_id")
+    if zone_id:
+        zone = await ms_client.get_zone_by_id(zone_id)
+        if zone:
+            zone_name = zone.get("name")
+    
+    # Obtener todos los tenderos asignados al vendedor
+    shopkeepers = await ms_client.get_all_shopkeepers(seller_id=seller_id, token=token)
+    
+    if not shopkeepers:
+        # Si no hay tenderos asignados, retornar respuesta vacía
+        return SellerAggregatedSalesResponse(
+            report_generated_at=datetime.utcnow(),
+            seller_id=seller_id,
+            seller_name=seller.get("name"),
+            seller_email=seller.get("email"),
+            zone_name=zone_name,
+            range_start=date_start,
+            range_end=date_end,
+            total_shopkeepers=0,
+            summary=SalesSummary(
+                total_records=0,
+                total_units=0,
+                total_amount=0.0,
+                average_ticket=0.0
+            ),
+            shopkeepers_summary=[]
+        )
+    
+    # Generar ventas para cada tendero y agregar
+    shopkeepers_summary_list = []
+    total_records = 0
+    total_units = 0
+    total_amount = 0.0
+    
+    for shopkeeper in shopkeepers:
+        shopkeeper_id = shopkeeper.get("id")
+        if not shopkeeper_id:
+            continue
+        
+        # Generar ventas mock para este tendero
+        rng = Random(shopkeeper_id)
+        generated_sales = _generate_mock_sales(shopkeeper_id, rng)
+        
+        # Filtrar por rango de fechas
+        filtered_sales = [
+            sale for sale in generated_sales
+            if date_start <= sale["sold_at"].date() <= date_end
+        ]
+        
+        # Calcular resumen para este tendero
+        shopkeeper_records = len(filtered_sales)
+        shopkeeper_units = sum(sale["quantity"] for sale in filtered_sales)
+        shopkeeper_amount = round(sum(sale["total_amount"] for sale in filtered_sales), 2)
+        shopkeeper_avg_ticket = round(shopkeeper_amount / shopkeeper_records, 2) if shopkeeper_records else 0.0
+        
+        # Agregar al total
+        total_records += shopkeeper_records
+        total_units += shopkeeper_units
+        total_amount += shopkeeper_amount
+        
+        # Agregar al resumen por tendero
+        shopkeepers_summary_list.append(ShopkeeperSalesSummary(
+            shopkeeper_id=shopkeeper_id,
+            shopkeeper_name=shopkeeper.get("name"),
+            shopkeeper_business_name=shopkeeper.get("business_name"),
+            total_records=shopkeeper_records,
+            total_units=shopkeeper_units,
+            total_amount=shopkeeper_amount,
+            average_ticket=shopkeeper_avg_ticket
+        ))
+    
+    # Calcular ticket promedio total
+    average_ticket = round(total_amount / total_records, 2) if total_records else 0.0
+    
+    return SellerAggregatedSalesResponse(
+        report_generated_at=datetime.utcnow(),
+        seller_id=seller_id,
+        seller_name=seller.get("name"),
+        seller_email=seller.get("email"),
+        zone_name=zone_name,
+        range_start=date_start,
+        range_end=date_end,
+        total_shopkeepers=len(shopkeepers),
+        summary=SalesSummary(
+            total_records=total_records,
+            total_units=total_units,
+            total_amount=round(total_amount, 2),
+            average_ticket=average_ticket
+        ),
+        shopkeepers_summary=shopkeepers_summary_list
     )
 
 
