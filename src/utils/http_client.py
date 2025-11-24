@@ -15,6 +15,7 @@ class MicroserviceClient:
         self.ms_geo_url = settings.MS_GEO_URL
         self.ms_user_url = settings.MS_USER_URL
         self.ms_auth_url = settings.MS_AUTH_URL
+        self.ms_product_url = settings.MS_PRODUCT_URL
     
     async def get_all_cities(self) -> List[dict]:
         """Obtiene todas las ciudades desde MS-GEO-PY"""
@@ -171,6 +172,75 @@ class MicroserviceClient:
                 return []
         except httpx.RequestError:
             return []
+    
+    async def get_shopkeeper_by_email(self, email: str, token: str = None) -> Optional[dict]:
+        """Obtiene el tendero asociado a un email de usuario"""
+        try:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                # Obtener todos los shopkeepers y filtrar por email
+                # Nota: El endpoint no soporta filtro por email directamente
+                response = await client.get(
+                    f"{self.ms_user_url}/api/v1/users/shopkeepers",
+                    params={"limit": 1000},  # Obtener muchos para buscar
+                    headers=headers
+                )
+                if response.status_code == 200:
+                    shopkeepers = response.json()
+                    # Buscar el shopkeeper con el email coincidente (case-insensitive)
+                    email_lower = email.lower() if email else ""
+                    for shopkeeper in shopkeepers:
+                        shopkeeper_email = shopkeeper.get("email")
+                        if shopkeeper_email and shopkeeper_email.lower() == email_lower:
+                            return shopkeeper
+                    # Si no se encuentra por email exacto, retornar None
+                    return None
+                elif response.status_code == 401:
+                    # Error de autenticación
+                    return None
+                else:
+                    # Otro error HTTP
+                    return None
+        except httpx.TimeoutException:
+            return None
+        except httpx.RequestError as e:
+            # Log del error para debugging
+            print(f"Error al obtener shopkeeper por email: {str(e)}")
+            return None
+        except Exception as e:
+            # Cualquier otro error
+            print(f"Error inesperado al obtener shopkeeper por email: {str(e)}")
+            return None
+    
+    async def get_all_products(self, category: Optional[str] = None, limit: int = 100) -> List[dict]:
+        """Obtiene todos los productos desde MS-PRODUCT-PY"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                params = {"limit": limit}
+                if category:
+                    params["category"] = category
+                response = await client.get(
+                    f"{self.ms_product_url}/api/v1/products",
+                    params=params
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return []
+        except httpx.RequestError:
+            return []
+    
+    async def get_product_by_id(self, product_id: int) -> Optional[dict]:
+        """Obtiene un producto específico por ID"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.ms_product_url}/api/v1/products/{product_id}"
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return None
+        except httpx.RequestError:
+            return None
     
     async def check_service_health(self, service_url: str) -> str:
         """Verifica el estado de un microservicio"""

@@ -763,4 +763,3 @@ async def health_check():
         version=settings.APP_VERSION,
         external_services=external_services
     )
-
