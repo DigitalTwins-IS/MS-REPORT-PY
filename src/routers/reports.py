@@ -3,11 +3,13 @@ Router de Reportes y Análisis
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from fastapi.responses import StreamingResponse
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timedelta, date
 import io
 import csv
 import json
+import asyncio
+from collections import defaultdict
 from random import Random
 
 from ..schemas import (
@@ -25,8 +27,23 @@ from ..schemas import (
     SalesHistoryResponse,
     SaleRecord,
     SalesSummary,
+    VisitsComplianceResponse,
+    SellerComplianceItem,
+    ComplianceSummary,
+    PeriodInfo,
     TopProductItem,
-    TopProductsResponse
+    TopProductsResponse,
+    MissingPopularProductItem,
+    ZoneDemandProduct,
+    ZoneDemandInsight,
+    DemandTrends,
+    DemandTrendPoint,
+    DemandForecastPoint,
+    StrategicRecommendation,
+    MarketOpportunitiesSummary,
+    MarketOpportunitiesResponse,
+    SellerAggregatedSalesResponse,
+    ShopkeeperSalesSummary
 )
 from ..utils import get_current_user, ms_client
 from ..config import settings
@@ -82,6 +99,30 @@ def _generate_mock_sales(shopkeeper_id: int, rng: Random) -> list[dict]:
     
     sales.sort(key=lambda item: item["sold_at"], reverse=True)
     return sales
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Convierte cadenas ISO (con o sin Z) a datetime."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        # Reemplazar Z por +00:00 para compatibilidad con fromisoformat
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+
+
+def _safe_float(value, default: float = 0.0) -> float:
+    """Convierte valores a float manejando None/Decimal/str."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 @router.get("/coverage", response_model=CoverageReportResponse)
@@ -735,6 +776,743 @@ async def get_sales_history(
             average_ticket=average_ticket
         ),
         sales=sales_payload
+    )
+
+
+@router.get("/market-opportunities", response_model=MarketOpportunitiesResponse)
+async def get_market_opportunities(
+    city_id: Optional[int] = Query(None, description="Filtrar por ciudad"),
+    zone_id: Optional[int] = Query(None, description="Filtrar por zona"),
+    category: Optional[str] = Query(None, description="Filtrar por categoría de producto"),
+    start_date: Optional[datetime] = Query(None, description="Fecha de inicio para tendencias"),
+    end_date: Optional[datetime] = Query(None, description="Fecha de fin para tendencias"),
+    popularity_threshold: float = Query(
+        0.6,
+        ge=0.0,
+        le=1.0,
+        description="Umbral mínimo de popularidad (0-1)"
+    ),
+    min_missing_shopkeepers: int = Query(
+        3,
+        ge=1,
+        le=500,
+        description="Mínimo de tenderos sin el producto para considerarlo brecha"
+    ),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    HU19 - Análisis de oportunidades de mercado.
+    
+    Identifica productos populares ausentes, tendencias por zona y genera recomendaciones estratégicas.
+    """
+    if current_user.get("role") != "ADMIN":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Solo los administradores pueden acceder a este análisis"
+        )
+    
+    token = None
+    if authorization:
+        token = authorization.replace("Bearer ", "").strip()
+    
+    def _to_str(value):
+        return None if value is None else str(value)
+
+    filters_snapshot = {
+        "city_id": _to_str(city_id),
+        "zone_id": _to_str(zone_id),
+        "category": _to_str(category),
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
+        "popularity_threshold": _to_str(popularity_threshold),
+        "min_missing_shopkeepers": _to_str(min_missing_shopkeepers)
+    }
+    
+    threshold = max(0.0, min(popularity_threshold, 1.0))
+    effective_min_missing = max(1, min_missing_shopkeepers)
+    
+    cities, zones, sellers, shopkeepers, products = await asyncio.gather(
+        ms_client.get_all_cities(),
+        ms_client.get_all_zones(),
+        ms_client.get_all_sellers(token=token),
+        ms_client.get_all_shopkeepers(token=token),
+        ms_client.get_all_products(category=category)
+    )
+    
+    city_map = {city["id"]: city for city in cities}
+    zone_map = {zone["id"]: zone for zone in zones}
+    zone_ids_for_city = {
+        zone["id"] for zone in zones
+        if city_id is None or zone.get("city_id") == city_id
+    }
+    
+    filtered_sellers = []
+    for seller in sellers:
+        seller_zone_id = seller.get("zone_id")
+        if zone_id and seller_zone_id != zone_id:
+            continue
+        if city_id and seller_zone_id not in zone_ids_for_city:
+            continue
+        filtered_sellers.append(seller)
+    
+    if not filtered_sellers and not zone_id and not city_id:
+        filtered_sellers = sellers
+    
+    seller_ids = {seller["id"] for seller in filtered_sellers if seller.get("id")}
+    if not seller_ids:
+        empty_summary = MarketOpportunitiesSummary(
+            generated_at=datetime.utcnow(),
+            total_products_missing=0,
+            total_impacted_shopkeepers=0,
+            estimated_monthly_revenue=0.0
+        )
+        return MarketOpportunitiesResponse(
+            summary=empty_summary,
+            filters=filters_snapshot,
+            missing_popular_products=[],
+            zone_trends=[],
+            demand_trends=DemandTrends(timeline=[], forecast=[]),
+            recommendations=[]
+        )
+    
+    filtered_shopkeepers = [
+        shopkeeper for shopkeeper in shopkeepers
+        if shopkeeper.get("seller_id") in seller_ids
+    ]
+    
+    if not filtered_shopkeepers:
+        empty_summary = MarketOpportunitiesSummary(
+            generated_at=datetime.utcnow(),
+            total_products_missing=0,
+            total_impacted_shopkeepers=0,
+            estimated_monthly_revenue=0.0
+        )
+        return MarketOpportunitiesResponse(
+            summary=empty_summary,
+            filters=filters_snapshot,
+            missing_popular_products=[],
+            zone_trends=[],
+            demand_trends=DemandTrends(timeline=[], forecast=[]),
+            recommendations=[]
+        )
+    
+    total_shopkeepers = len(filtered_shopkeepers)
+    product_catalog = {product["id"]: product for product in products if product.get("id")}
+    seller_zone_map = {seller["id"]: seller.get("zone_id") for seller in filtered_sellers}
+    
+    shop_zone_details: Dict[int, Dict[str, Optional[str]]] = {}
+    for shop in filtered_shopkeepers:
+        zone_info = {"zone_id": None, "zone_name": "Sin zona", "city_name": None}
+        seller_id = shop.get("seller_id")
+        zone_id_for_shop = seller_zone_map.get(seller_id)
+        if zone_id_for_shop:
+            zone_data = zone_map.get(zone_id_for_shop, {})
+            city_data = city_map.get(zone_data.get("city_id"))
+            zone_info = {
+                "zone_id": zone_id_for_shop,
+                "zone_name": zone_data.get("name", f"Zona {zone_id_for_shop}"),
+                "city_name": city_data.get("name") if city_data else None
+            }
+        shop_zone_details[shop["id"]] = zone_info
+    
+    inventory_by_shop = {}
+    for shop in filtered_shopkeepers:
+        shop_id = shop.get("id")
+        if not shop_id:
+            continue
+        inventory_items = await ms_client.get_inventory_by_shopkeeper(shop_id, token=token)
+        inventory_by_shop[shop_id] = inventory_items or []
+    
+    product_stats = {}
+    shop_products_map: Dict[int, set] = {}
+    
+    for shop in filtered_shopkeepers:
+        shop_id = shop.get("id")
+        inventory_items = inventory_by_shop.get(shop_id, [])
+        product_ids_for_shop = set()
+        
+        for item in inventory_items:
+            product_id = item.get("product_id") or item.get("id")
+            if not product_id:
+                continue
+            
+            catalog_entry = product_catalog.get(product_id, {})
+            product_category = item.get("category") or item.get("product_category") or catalog_entry.get("category")
+            if category and product_category and category.lower() not in product_category.lower():
+                continue
+            
+            product_ids_for_shop.add(product_id)
+            
+            product_name = (
+                item.get("product_name")
+                or catalog_entry.get("name")
+                or f"Producto {product_id}"
+            )
+            unit_price = (
+                _safe_float(item.get("price"))
+                or _safe_float(item.get("unit_price"))
+                or _safe_float(catalog_entry.get("price"))
+            )
+            stock = _safe_float(item.get("stock", item.get("current_stock")))
+            min_stock = _safe_float(item.get("min_stock"), default=0.0)
+            max_stock = _safe_float(item.get("max_stock"), default=min_stock * 2 if min_stock else stock + 10)
+            units_needed = max(0.0, max_stock - stock)
+            
+            stats = product_stats.setdefault(product_id, {
+                "product_name": product_name,
+                "category": product_category,
+                "shopkeepers_with": 0,
+                "total_stock": 0.0,
+                "total_units_needed": 0.0,
+                "total_price": 0.0,
+                "low_stock": 0,
+                "shopkeeper_ids": set()
+            })
+            
+            stats["product_name"] = product_name
+            stats["category"] = product_category
+            stats["shopkeepers_with"] += 1
+            stats["total_stock"] += stock
+            stats["total_units_needed"] += units_needed
+            stats["total_price"] += unit_price if unit_price else 0.0
+            stats["shopkeeper_ids"].add(shop_id)
+            if min_stock and stock < min_stock:
+                stats["low_stock"] += 1
+        
+        shop_products_map[shop_id] = product_ids_for_shop
+    
+    missing_products: List[MissingPopularProductItem] = []
+    for product_id, stats in product_stats.items():
+        popularity = stats["shopkeepers_with"] / total_shopkeepers if total_shopkeepers else 0.0
+        if popularity < threshold:
+            continue
+        
+        missing_count = total_shopkeepers - stats["shopkeepers_with"]
+        if missing_count < effective_min_missing:
+            continue
+        
+        avg_price = (
+            stats["total_price"] / stats["shopkeepers_with"]
+            if stats["shopkeepers_with"] else 0.0
+        )
+        avg_units_needed = (
+            stats["total_units_needed"] / stats["shopkeepers_with"]
+            if stats["shopkeepers_with"] else 0.0
+        )
+        potential_revenue = max(0.0, missing_count * max(avg_units_needed, 1.0) * avg_price)
+        
+        impacted_zones = set()
+        for shop in filtered_shopkeepers:
+            shop_id = shop.get("id")
+            if not shop_id:
+                continue
+            if product_id not in shop_products_map.get(shop_id, set()):
+                impacted_zones.add(shop_zone_details[shop_id]["zone_name"])
+        
+        if not impacted_zones:
+            continue
+        
+        priority = "low"
+        if popularity >= 0.8 and missing_count >= effective_min_missing * 2:
+            priority = "high"
+        elif popularity >= 0.65:
+            priority = "medium"
+        
+        missing_products.append(MissingPopularProductItem(
+            product_id=product_id,
+            product_name=stats["product_name"],
+            category=stats["category"],
+            global_popularity=round(popularity, 2),
+            missing_shopkeepers=missing_count,
+            impacted_zones=sorted(impacted_zones),
+            potential_monthly_revenue=round(potential_revenue, 2),
+            priority=priority,
+            avg_unit_price=round(avg_price, 2)
+        ))
+    
+    missing_products.sort(
+        key=lambda item: (
+            {"high": 2, "medium": 1, "low": 0}[item.priority],
+            item.global_popularity,
+            item.potential_monthly_revenue
+        ),
+        reverse=True
+    )
+    
+    zone_groups = defaultdict(list)
+    for shop in filtered_shopkeepers:
+        details = shop_zone_details.get(shop["id"], {})
+        zone_groups[details.get("zone_id")].append(shop["id"])
+    
+    zone_trends: List[ZoneDemandInsight] = []
+    for group_zone_id, shop_ids in zone_groups.items():
+        zone_product_stats = {}
+        total_gap = 0.0
+        
+        for shop_id in shop_ids:
+            for item in inventory_by_shop.get(shop_id, []):
+                product_id = item.get("product_id") or item.get("id")
+                if not product_id:
+                    continue
+                stats = zone_product_stats.setdefault(product_id, {
+                    "name": item.get("product_name") or f"Producto {product_id}",
+                    "units_needed": 0.0,
+                    "low_stock": 0,
+                    "shopkeepers": 0
+                })
+                stock = _safe_float(item.get("stock", item.get("current_stock")))
+                min_stock = _safe_float(item.get("min_stock"))
+                max_stock = _safe_float(item.get("max_stock"), default=min_stock * 2 if min_stock else stock + 10)
+                units_needed = max(0.0, max_stock - stock)
+                stats["units_needed"] += units_needed
+                stats["shopkeepers"] += 1
+                if min_stock and stock < min_stock:
+                    stats["low_stock"] += 1
+                total_gap += units_needed
+        
+        zone_data = zone_map.get(group_zone_id or 0, {})
+        city_name = None
+        if group_zone_id and zone_data.get("city_id"):
+            city_name = city_map.get(zone_data.get("city_id"), {}).get("name")
+        
+        top_demands = sorted(
+            zone_product_stats.items(),
+            key=lambda entry: entry[1]["units_needed"],
+            reverse=True
+        )[:3]
+        
+        zone_products = [
+            ZoneDemandProduct(
+                product_id=pid,
+                product_name=stats["name"],
+                growth_percentage=round(
+                    min(100.0, (stats["low_stock"] / stats["shopkeepers"] * 100) if stats["shopkeepers"] else 0.0),
+                    2
+                ),
+                stock_gap=round(stats["units_needed"] / stats["shopkeepers"], 2) if stats["shopkeepers"] else 0.0
+            )
+            for pid, stats in top_demands
+        ]
+        
+        avg_stock_gap = (total_gap / len(shop_ids)) if shop_ids else 0.0
+        demand_variation = 0.0
+        if zone_products:
+            demand_variation = round(
+                sum(product.growth_percentage for product in zone_products) / len(zone_products),
+                2
+            )
+        
+        zone_trends.append(ZoneDemandInsight(
+            zone_id=group_zone_id,
+            zone_name=zone_data.get("name", "Sin zona"),
+            city_name=city_name,
+            top_demands=zone_products,
+            avg_stock_gap=round(avg_stock_gap, 2),
+            demand_variation=demand_variation,
+            shopkeepers_covered=len(shop_ids),
+            unmet_demand=round(total_gap, 2)
+        ))
+    
+    zone_trends.sort(key=lambda item: item.unmet_demand, reverse=True)
+    
+    demand_timeline = defaultdict(lambda: {"total": 0, "completed": 0, "pending": 0})
+    all_visits = []
+    for seller_id in seller_ids:
+        visits = await ms_client.get_visits(
+            seller_id=seller_id,
+            start_date=start_date,
+            end_date=end_date,
+            token=token
+        )
+        if visits:
+            all_visits.extend(visits)
+    
+    for visit in all_visits:
+        scheduled_dt = _parse_iso_datetime(visit.get("scheduled_date"))
+        if not scheduled_dt:
+            continue
+        label = f"{scheduled_dt.isocalendar().year}-W{scheduled_dt.isocalendar().week:02d}"
+        demand_timeline[label]["total"] += 1
+        status_visit = (visit.get("status") or "").lower()
+        if status_visit == "completed":
+            demand_timeline[label]["completed"] += 1
+        elif status_visit == "pending":
+            demand_timeline[label]["pending"] += 1
+    
+    timeline_points = [
+        DemandTrendPoint(
+            label=label,
+            total_demand=data["total"],
+            completed=data["completed"],
+            pending=data["pending"]
+        )
+        for label, data in sorted(demand_timeline.items())
+    ]
+    
+    forecast_points: List[DemandForecastPoint] = []
+    if timeline_points:
+        demands = [point.total_demand for point in timeline_points]
+        avg_demand = sum(demands) / len(demands) if demands else 0
+        momentum = 0.0
+        if len(demands) >= 2:
+            previous = max(demands[-2], 1)
+            momentum = (demands[-1] - demands[-2]) / previous
+        
+        last_label = timeline_points[-1].label
+        try:
+            year_str, week_str = last_label.split("-W")
+            base_date = datetime.fromisocalendar(int(year_str), int(week_str), 1)
+        except Exception:
+            base_date = datetime.utcnow()
+        
+        for offset in (1, 2):
+            future_date = base_date + timedelta(weeks=offset)
+            iso = future_date.isocalendar()
+            label = f"{iso.year}-W{iso.week:02d}"
+            growth_factor = max(0.0, momentum) * offset
+            expected = max(1, round(avg_demand * (1 + growth_factor)))
+            forecast_points.append(DemandForecastPoint(label=label, expected_demand=expected))
+    
+    demand_trends = DemandTrends(
+        timeline=timeline_points,
+        forecast=forecast_points
+    )
+    
+    recommendations: List[StrategicRecommendation] = []
+    for product in missing_products[:3]:
+        recommendations.append(StrategicRecommendation(
+            id=f"PROD-{product.product_id}",
+            type="supply",
+            message=f"Abastecer {product.product_name} en {len(product.impacted_zones)} zonas prioritarias",
+            rationale=f"{product.missing_shopkeepers} tenderos sin stock y popularidad {product.global_popularity * 100:.1f}%",
+            impact="Alta" if product.priority == "high" else ("Media" if product.priority == "medium" else "Baja"),
+            urgency="Alta" if product.priority == "high" else ("Media" if product.priority == "medium" else "Baja")
+        ))
+    
+    if zone_trends:
+        top_zone = zone_trends[0]
+        recommendations.append(StrategicRecommendation(
+            id=f"ZONE-{top_zone.zone_id or 'NA'}",
+            type="campaign",
+            message=f"Ejecutar campaña en {top_zone.zone_name} para balancear demanda",
+            rationale=f"Gap promedio de {top_zone.avg_stock_gap} unidades y variación {top_zone.demand_variation}%",
+            impact="Alta" if top_zone.avg_stock_gap > 20 else "Media",
+            urgency="Media" if top_zone.avg_stock_gap > 10 else "Baja"
+        ))
+    
+    if demand_trends.forecast:
+        forecast = demand_trends.forecast[0]
+        recommendations.append(StrategicRecommendation(
+            id="TREND-FORECAST",
+            type="alert",
+            message=f"Preparar capacidad para demanda esperada de {forecast.expected_demand} visitas en {forecast.label}",
+            rationale="La tendencia semanal muestra crecimiento sostenido",
+            impact="Media",
+            urgency="Media"
+        ))
+    
+    recommendations = recommendations[:5]
+    
+    summary = MarketOpportunitiesSummary(
+        generated_at=datetime.utcnow(),
+        total_products_missing=len(missing_products),
+        total_impacted_shopkeepers=sum(item.missing_shopkeepers for item in missing_products),
+        estimated_monthly_revenue=round(
+            sum(item.potential_monthly_revenue for item in missing_products),
+            2
+        )
+    )
+    
+    return MarketOpportunitiesResponse(
+        summary=summary,
+        filters=filters_snapshot,
+        missing_popular_products=missing_products,
+        zone_trends=zone_trends,
+        demand_trends=demand_trends,
+        recommendations=recommendations
+    )
+
+
+@router.get("/visits-compliance", response_model=VisitsComplianceResponse)
+async def get_visits_compliance(
+    seller_id: Optional[int] = Query(None, description="Filtrar por vendedor específico"),
+    zone_id: Optional[int] = Query(None, description="Filtrar por zona geográfica"),
+    start_date: Optional[datetime] = Query(None, description="Fecha de inicio del período"),
+    end_date: Optional[datetime] = Query(None, description="Fecha de fin del período"),
+    sort_by: Optional[str] = Query("compliance_percentage", description="Campo para ordenar (compliance_percentage, seller_name, total_visits)"),
+    sort_order: Optional[str] = Query("desc", description="Orden (asc, desc)"),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    Reporte de cumplimiento de visitas por vendedor
+    HU15: Como administrador, quiero ver % de cumplimiento de visitas para evaluar desempeño de cada vendedor
+    
+    Calcula el porcentaje de cumplimiento basado en:
+    - Visitas completadas / (Visitas completadas + Visitas pendientes)
+    - Las visitas canceladas no se incluyen en el cálculo
+    """
+    # Validar permisos (solo ADMIN)
+    if current_user.get("role") != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo los administradores pueden ver este reporte"
+        )
+    
+    # Extraer token del header de manera robusta
+    token = None
+    if authorization:
+        # Manejar tanto "Bearer token" como solo "token"
+        if authorization.startswith("Bearer "):
+            token = authorization.replace("Bearer ", "").strip()
+        else:
+            token = authorization.strip()
+    
+    # Obtener todos los vendedores (filtrados por zona si aplica)
+    sellers = await ms_client.get_all_sellers(zone_id=zone_id, token=token)
+    zones = await ms_client.get_all_zones()
+    
+    # Si se especifica un vendedor, filtrar
+    if seller_id:
+        sellers = [s for s in sellers if s["id"] == seller_id]
+    
+    # Obtener todas las visitas para los vendedores seleccionados
+    all_visits = []
+    for seller in sellers:
+        visits = await ms_client.get_visits(
+            seller_id=seller["id"],
+            start_date=start_date,
+            end_date=end_date,
+            token=token
+        )
+        all_visits.extend(visits)
+    
+    # Procesar datos por vendedor
+    sellers_compliance = []
+    total_visits_all = 0
+    total_completed_all = 0
+    total_pending_all = 0
+    total_cancelled_all = 0
+    compliance_percentages = []
+    
+    for seller in sellers:
+        # Filtrar visitas de este vendedor
+        seller_visits = [v for v in all_visits if v.get("seller_id") == seller["id"]]
+        
+        # Contar por estado
+        completed = len([v for v in seller_visits if v.get("status") == "completed"])
+        pending = len([v for v in seller_visits if v.get("status") == "pending"])
+        cancelled = len([v for v in seller_visits if v.get("status") == "cancelled"])
+        
+        # Total de visitas programadas (completed + pending, sin cancelled)
+        total_programmed = completed + pending
+        
+        # Calcular porcentaje de cumplimiento
+        if total_programmed > 0:
+            compliance_percentage = (completed / total_programmed) * 100
+        else:
+            compliance_percentage = 0.0
+        
+        # Obtener nombre de zona
+        zone_name = next(
+            (z["name"] for z in zones if z["id"] == seller.get("zone_id")),
+            "Sin zona"
+        )
+        
+        sellers_compliance.append(SellerComplianceItem(
+            seller_id=seller["id"],
+            seller_name=seller["name"],
+            zone_id=seller.get("zone_id"),
+            zone_name=zone_name,
+            total_visits=total_programmed,
+            completed_visits=completed,
+            pending_visits=pending,
+            cancelled_visits=cancelled,
+            compliance_percentage=round(compliance_percentage, 2),
+            period=PeriodInfo(
+                start_date=start_date,
+                end_date=end_date
+            ) if start_date or end_date else None
+        ))
+        
+        # Acumular para resumen
+        total_visits_all += total_programmed
+        total_completed_all += completed
+        total_pending_all += pending
+        total_cancelled_all += cancelled
+        if total_programmed > 0:
+            compliance_percentages.append(compliance_percentage)
+    
+    # Ordenar resultados
+    reverse_order = sort_order == "desc"
+    if sort_by == "compliance_percentage":
+        sellers_compliance.sort(key=lambda x: x.compliance_percentage, reverse=reverse_order)
+    elif sort_by == "seller_name":
+        sellers_compliance.sort(key=lambda x: x.seller_name, reverse=reverse_order)
+    elif sort_by == "total_visits":
+        sellers_compliance.sort(key=lambda x: x.total_visits, reverse=reverse_order)
+    
+    # Calcular promedio de cumplimiento
+    average_compliance = sum(compliance_percentages) / len(compliance_percentages) if compliance_percentages else 0.0
+    
+    # Crear resumen
+    summary = ComplianceSummary(
+        total_sellers=len(sellers_compliance),
+        average_compliance=round(average_compliance, 2),
+        total_visits=total_visits_all,
+        total_completed=total_completed_all,
+        total_pending=total_pending_all,
+        total_cancelled=total_cancelled_all
+    )
+    
+    # Crear período
+    period = PeriodInfo(
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    return VisitsComplianceResponse(
+        sellers_compliance=sellers_compliance,
+        summary=summary,
+        period=period
+    )
+
+
+@router.get(
+    "/sales-aggregated/sellers/{seller_id}",
+    response_model=SellerAggregatedSalesResponse,
+    summary="Reporte agregado de ventas por vendedor",
+    description="Retorna el reporte agregado de ventas de todos los tenderos asignados a un vendedor específico."
+)
+async def get_seller_aggregated_sales(
+    seller_id: int,
+    start_date: date = Query(
+        None,
+        description="Fecha inicial del rango (YYYY-MM-DD). Por defecto últimos 30 días."
+    ),
+    end_date: date = Query(
+        None,
+        description="Fecha final del rango (YYYY-MM-DD)."
+    ),
+    current_user: dict = Depends(get_current_user),
+    authorization: str = Header(None)
+):
+    """
+    Reporte agregado de ventas de un vendedor
+    
+    Agrega las ventas de todos los tenderos asignados al vendedor
+    para medir su rendimiento general.
+    """
+    token = authorization.replace("Bearer ", "") if authorization else None
+    
+    date_end = end_date or datetime.utcnow().date()
+    date_start = start_date or (date_end - timedelta(days=30))
+    
+    if date_start > date_end:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="La fecha inicial no puede ser posterior a la fecha final."
+        )
+    
+    # Obtener información del vendedor
+    seller = await ms_client.get_seller_by_id(seller_id, token=token)
+    if not seller:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Vendedor no encontrado.")
+    
+    # Obtener zona del vendedor
+    zone_name = None
+    zone_id = seller.get("zone_id")
+    if zone_id:
+        zone = await ms_client.get_zone_by_id(zone_id)
+        if zone:
+            zone_name = zone.get("name")
+    
+    # Obtener todos los tenderos asignados al vendedor
+    shopkeepers = await ms_client.get_all_shopkeepers(seller_id=seller_id, token=token)
+    
+    if not shopkeepers:
+        # Si no hay tenderos asignados, retornar respuesta vacía
+        return SellerAggregatedSalesResponse(
+            report_generated_at=datetime.utcnow(),
+            seller_id=seller_id,
+            seller_name=seller.get("name"),
+            seller_email=seller.get("email"),
+            zone_name=zone_name,
+            range_start=date_start,
+            range_end=date_end,
+            total_shopkeepers=0,
+            summary=SalesSummary(
+                total_records=0,
+                total_units=0,
+                total_amount=0.0,
+                average_ticket=0.0
+            ),
+            shopkeepers_summary=[]
+        )
+    
+    # Generar ventas para cada tendero y agregar
+    shopkeepers_summary_list = []
+    total_records = 0
+    total_units = 0
+    total_amount = 0.0
+    
+    for shopkeeper in shopkeepers:
+        shopkeeper_id = shopkeeper.get("id")
+        if not shopkeeper_id:
+            continue
+        
+        # Generar ventas mock para este tendero
+        rng = Random(shopkeeper_id)
+        generated_sales = _generate_mock_sales(shopkeeper_id, rng)
+        
+        # Filtrar por rango de fechas
+        filtered_sales = [
+            sale for sale in generated_sales
+            if date_start <= sale["sold_at"].date() <= date_end
+        ]
+        
+        # Calcular resumen para este tendero
+        shopkeeper_records = len(filtered_sales)
+        shopkeeper_units = sum(sale["quantity"] for sale in filtered_sales)
+        shopkeeper_amount = round(sum(sale["total_amount"] for sale in filtered_sales), 2)
+        shopkeeper_avg_ticket = round(shopkeeper_amount / shopkeeper_records, 2) if shopkeeper_records else 0.0
+        
+        # Agregar al total
+        total_records += shopkeeper_records
+        total_units += shopkeeper_units
+        total_amount += shopkeeper_amount
+        
+        # Agregar al resumen por tendero
+        shopkeepers_summary_list.append(ShopkeeperSalesSummary(
+            shopkeeper_id=shopkeeper_id,
+            shopkeeper_name=shopkeeper.get("name"),
+            shopkeeper_business_name=shopkeeper.get("business_name"),
+            total_records=shopkeeper_records,
+            total_units=shopkeeper_units,
+            total_amount=shopkeeper_amount,
+            average_ticket=shopkeeper_avg_ticket
+        ))
+    
+    # Calcular ticket promedio total
+    average_ticket = round(total_amount / total_records, 2) if total_records else 0.0
+    
+    return SellerAggregatedSalesResponse(
+        report_generated_at=datetime.utcnow(),
+        seller_id=seller_id,
+        seller_name=seller.get("name"),
+        seller_email=seller.get("email"),
+        zone_name=zone_name,
+        range_start=date_start,
+        range_end=date_end,
+        total_shopkeepers=len(shopkeepers),
+        summary=SalesSummary(
+            total_records=total_records,
+            total_units=total_units,
+            total_amount=round(total_amount, 2),
+            average_ticket=average_ticket
+        ),
+        shopkeepers_summary=shopkeepers_summary_list
     )
 
 

@@ -2,7 +2,7 @@
 Schemas para Reportes y Análisis
 """
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, date
 
 
@@ -368,6 +368,65 @@ class SalesHistoryResponse(BaseModel):
         }
 
 
+class ShopkeeperSalesSummary(BaseModel):
+    """Resumen de ventas por tendero"""
+    shopkeeper_id: int = Field(..., description="ID del tendero")
+    shopkeeper_name: Optional[str] = Field(None, description="Nombre del tendero")
+    shopkeeper_business_name: Optional[str] = Field(None, description="Nombre comercial del tendero")
+    total_records: int = Field(..., description="Número total de ventas")
+    total_units: int = Field(..., description="Total de unidades vendidas")
+    total_amount: float = Field(..., description="Valor total vendido en COP")
+    average_ticket: float = Field(..., description="Ticket promedio por transacción en COP")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "shopkeeper_id": 12,
+                "shopkeeper_name": "Supermercado El Ahorro",
+                "shopkeeper_business_name": "Supermercado El Ahorro",
+                "total_records": 18,
+                "total_units": 240,
+                "total_amount": 2680000.0,
+                "average_ticket": 148888.89
+            }
+        }
+
+
+class SellerAggregatedSalesResponse(BaseModel):
+    """Respuesta con el reporte agregado de ventas de un vendedor"""
+    report_generated_at: datetime = Field(..., description="Fecha y hora de generación del reporte")
+    seller_id: int = Field(..., description="ID del vendedor")
+    seller_name: Optional[str] = Field(None, description="Nombre del vendedor")
+    seller_email: Optional[str] = Field(None, description="Email del vendedor")
+    zone_name: Optional[str] = Field(None, description="Nombre de la zona asignada")
+    range_start: date = Field(..., description="Fecha inicial del filtro aplicado")
+    range_end: date = Field(..., description="Fecha final del filtro aplicado")
+    total_shopkeepers: int = Field(..., description="Total de tenderos asignados al vendedor")
+    summary: SalesSummary = Field(..., description="Resumen agregado total de todas las ventas")
+    shopkeepers_summary: List[ShopkeeperSalesSummary] = Field(default_factory=list, description="Resumen de ventas por cada tendero")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "report_generated_at": "2025-10-05T18:30:00Z",
+                "seller_id": 4,
+                "seller_name": "Juan Pérez",
+                "seller_email": "juan@vendedor.com",
+                "zone_name": "Norte",
+                "range_start": "2025-09-05",
+                "range_end": "2025-10-05",
+                "total_shopkeepers": 5,
+                "summary": {
+                    "total_records": 90,
+                    "total_units": 1200,
+                    "total_amount": 13400000.0,
+                    "average_ticket": 148888.89
+                },
+                "shopkeepers_summary": []
+            }
+        }
+
+
 class HealthResponse(BaseModel):
     """Health check response"""
     status: str = Field(..., description="Estado del servicio")
@@ -389,3 +448,288 @@ class HealthResponse(BaseModel):
             }
         }
 
+
+class PeriodInfo(BaseModel):
+    """Información del período de análisis"""
+    start_date: Optional[datetime] = Field(None, description="Fecha de inicio")
+    end_date: Optional[datetime] = Field(None, description="Fecha de fin")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "start_date": "2025-01-01T00:00:00Z",
+                "end_date": "2025-01-31T23:59:59Z"
+            }
+        }
+
+
+class SellerComplianceItem(BaseModel):
+    """Item de cumplimiento de visitas por vendedor"""
+    seller_id: int = Field(..., description="ID del vendedor")
+    seller_name: str = Field(..., description="Nombre del vendedor")
+    zone_id: Optional[int] = Field(None, description="ID de la zona")
+    zone_name: Optional[str] = Field(None, description="Nombre de la zona")
+    total_visits: int = Field(..., description="Total de visitas programadas (pending + completed)")
+    completed_visits: int = Field(..., description="Visitas completadas")
+    pending_visits: int = Field(..., description="Visitas pendientes")
+    cancelled_visits: int = Field(..., description="Visitas canceladas")
+    compliance_percentage: float = Field(..., description="Porcentaje de cumplimiento")
+    period: Optional[PeriodInfo] = Field(None, description="Período de análisis")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "seller_id": 1,
+                "seller_name": "Juan Pérez",
+                "zone_id": 1,
+                "zone_name": "Zona Norte",
+                "total_visits": 50,
+                "completed_visits": 45,
+                "pending_visits": 3,
+                "cancelled_visits": 2,
+                "compliance_percentage": 90.0,
+                "period": {
+                    "start_date": "2025-01-01T00:00:00Z",
+                    "end_date": "2025-01-31T23:59:59Z"
+                }
+            }
+        }
+
+
+class ComplianceSummary(BaseModel):
+    """Resumen del reporte de cumplimiento"""
+    total_sellers: int = Field(..., description="Total de vendedores evaluados")
+    average_compliance: float = Field(..., description="Promedio de cumplimiento")
+    total_visits: int = Field(..., description="Total de visitas programadas")
+    total_completed: int = Field(..., description="Total de visitas completadas")
+    total_pending: int = Field(..., description="Total de visitas pendientes")
+    total_cancelled: int = Field(..., description="Total de visitas canceladas")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total_sellers": 10,
+                "average_compliance": 85.5,
+                "total_visits": 500,
+                "total_completed": 425,
+                "total_pending": 50,
+                "total_cancelled": 25
+            }
+        }
+
+
+class VisitsComplianceResponse(BaseModel):
+    """Respuesta del reporte de cumplimiento de visitas"""
+    sellers_compliance: List[SellerComplianceItem] = Field(..., description="Lista de cumplimiento por vendedor")
+    summary: ComplianceSummary = Field(..., description="Resumen del reporte")
+    period: PeriodInfo = Field(..., description="Período de análisis")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sellers_compliance": [],
+                "summary": {
+                    "total_sellers": 10,
+                    "average_compliance": 85.5,
+                    "total_visits": 500,
+                    "total_completed": 425,
+                    "total_pending": 50,
+                    "total_cancelled": 25
+                },
+                "period": {
+                    "start_date": "2025-01-01T00:00:00Z",
+                    "end_date": "2025-01-31T23:59:59Z"
+                }
+            }
+        }
+
+
+class MissingPopularProductItem(BaseModel):
+    """Producto popular que no está presente en múltiples tenderos"""
+    product_id: int = Field(..., description="ID del producto")
+    product_name: str = Field(..., description="Nombre del producto")
+    category: Optional[str] = Field(None, description="Categoría del producto")
+    global_popularity: float = Field(..., ge=0, le=1, description="Popularidad global normalizada (0-1)")
+    missing_shopkeepers: int = Field(..., ge=0, description="Tenderos sin el producto")
+    impacted_zones: List[str] = Field(default_factory=list, description="Zonas impactadas")
+    potential_monthly_revenue: float = Field(..., description="Ingresos potenciales mensuales estimados")
+    priority: str = Field(..., description="Prioridad (high, medium, low)")
+    avg_unit_price: float = Field(..., ge=0, description="Precio unitario promedio")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "product_id": 42,
+                "product_name": "Bebida Energética X",
+                "category": "Bebidas",
+                "global_popularity": 0.86,
+                "missing_shopkeepers": 7,
+                "impacted_zones": ["Zona Norte", "Zona Centro"],
+                "potential_monthly_revenue": 3250000.0,
+                "priority": "high",
+                "avg_unit_price": 4500.0
+            }
+        }
+
+
+class ZoneDemandProduct(BaseModel):
+    """Producto destacado dentro de una zona"""
+    product_id: int = Field(..., description="ID del producto")
+    product_name: str = Field(..., description="Nombre del producto")
+    growth_percentage: float = Field(..., description="Crecimiento porcentual de demanda")
+    stock_gap: float = Field(..., description="Gap promedio de stock (unidades)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "product_id": 101,
+                "product_name": "Cafe Especial 500g",
+                "growth_percentage": 18.5,
+                "stock_gap": 32.0
+            }
+        }
+
+
+class ZoneDemandInsight(BaseModel):
+    """Insights de demanda por zona"""
+    zone_id: Optional[int] = Field(None, description="ID de la zona")
+    zone_name: str = Field(..., description="Nombre de la zona")
+    city_name: Optional[str] = Field(None, description="Ciudad asociada")
+    top_demands: List[ZoneDemandProduct] = Field(default_factory=list, description="Productos con mayor demanda")
+    avg_stock_gap: float = Field(..., description="Gap promedio de stock en la zona")
+    demand_variation: float = Field(..., description="Variación porcentual de la demanda")
+    shopkeepers_covered: int = Field(..., description="Total de tenderos analizados")
+    unmet_demand: float = Field(..., description="Demanda no cubierta estimada")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "zone_id": 3,
+                "zone_name": "Zona Sur",
+                "city_name": "Bogotá",
+                "top_demands": [
+                    {
+                        "product_id": 22,
+                        "product_name": "Detergente Premium",
+                        "growth_percentage": 21.0,
+                        "stock_gap": 28.0
+                    }
+                ],
+                "avg_stock_gap": 18.5,
+                "demand_variation": 14.2,
+                "shopkeepers_covered": 5,
+                "unmet_demand": 420.0
+            }
+        }
+
+
+class DemandTrendPoint(BaseModel):
+    """Punto temporal de demanda"""
+    label: str = Field(..., description="Etiqueta temporal (ej. 2025-W40)")
+    total_demand: int = Field(..., description="Demanda total en el período")
+    completed: int = Field(..., description="Visitas completadas")
+    pending: int = Field(..., description="Visitas pendientes")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "label": "2025-W40",
+                "total_demand": 52,
+                "completed": 38,
+                "pending": 14
+            }
+        }
+
+
+class DemandForecastPoint(BaseModel):
+    """Punto de proyección de demanda"""
+    label: str = Field(..., description="Etiqueta temporal futura")
+    expected_demand: int = Field(..., description="Demanda esperada")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "label": "2025-W44",
+                "expected_demand": 60
+            }
+        }
+
+
+class DemandTrends(BaseModel):
+    """Serie temporal y proyección de demanda"""
+    timeline: List[DemandTrendPoint] = Field(default_factory=list, description="Histórico de demanda")
+    forecast: List[DemandForecastPoint] = Field(default_factory=list, description="Proyección de demanda")
+
+
+class StrategicRecommendation(BaseModel):
+    """Recomendación estratégica"""
+    id: str = Field(..., description="Identificador de la recomendación")
+    type: str = Field(..., description="Tipo de acción (supply, campaign, expansion, alert)")
+    message: str = Field(..., description="Mensaje accionable")
+    rationale: str = Field(..., description="Justificación de la recomendación")
+    impact: str = Field(..., description="Impacto estimado (Alta, Media, Baja)")
+    urgency: str = Field(..., description="Urgencia (Alta, Media, Baja)")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "REC-001",
+                "type": "supply",
+                "message": "Priorizar envío de Bebida Energética X a Zona Centro",
+                "rationale": "Producto con popularidad 0.9 ausente en 5 tenderos",
+                "impact": "Alta",
+                "urgency": "Alta"
+            }
+        }
+
+
+class MarketOpportunitiesSummary(BaseModel):
+    """Resumen ejecutivo del análisis de mercado"""
+    generated_at: datetime = Field(..., description="Fecha de generación")
+    total_products_missing: int = Field(..., description="Cantidad de productos populares con brechas")
+    total_impacted_shopkeepers: int = Field(..., description="Tenderos impactados por las brechas")
+    estimated_monthly_revenue: float = Field(..., description="Ingresos mensuales potenciales estimados")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "generated_at": "2025-11-23T10:00:00Z",
+                "total_products_missing": 6,
+                "total_impacted_shopkeepers": 18,
+                "estimated_monthly_revenue": 8200000.0
+            }
+        }
+
+
+class MarketOpportunitiesResponse(BaseModel):
+    """Respuesta del análisis de oportunidades de mercado"""
+    summary: MarketOpportunitiesSummary = Field(..., description="Resumen ejecutivo")
+    filters: Dict[str, Optional[str]] = Field(default_factory=dict, description="Filtros aplicados")
+    missing_popular_products: List[MissingPopularProductItem] = Field(default_factory=list, description="Productos populares ausentes")
+    zone_trends: List[ZoneDemandInsight] = Field(default_factory=list, description="Insights por zona")
+    demand_trends: DemandTrends = Field(default_factory=DemandTrends, description="Tendencias de demanda")
+    recommendations: List[StrategicRecommendation] = Field(default_factory=list, description="Recomendaciones estratégicas")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "summary": {
+                    "generated_at": "2025-11-23T10:00:00Z",
+                    "total_products_missing": 4,
+                    "total_impacted_shopkeepers": 12,
+                    "estimated_monthly_revenue": 5800000.0
+                },
+                "filters": {
+                    "city_id": 1,
+                    "zone_id": None,
+                    "category": "Bebidas"
+                },
+                "missing_popular_products": [],
+                "zone_trends": [],
+                "demand_trends": {
+                    "timeline": [],
+                    "forecast": []
+                },
+                "recommendations": []
+            }
+        }

@@ -17,7 +17,22 @@ from .reports import (
     TopProductsResponse,
     SaleRecord,
     SalesSummary,
-    SalesHistoryResponse
+    SalesHistoryResponse,
+    PeriodInfo,
+    SellerComplianceItem,
+    ComplianceSummary,
+    VisitsComplianceResponse,
+    MissingPopularProductItem,
+    ZoneDemandProduct,
+    ZoneDemandInsight,
+    DemandTrendPoint,
+    DemandForecastPoint,
+    DemandTrends,
+    StrategicRecommendation,
+    MarketOpportunitiesSummary,
+    MarketOpportunitiesResponse,
+    ShopkeeperSalesSummary,
+    SellerAggregatedSalesResponse
 )
 
 __all__ = [
@@ -36,6 +51,21 @@ __all__ = [
     "TopProductsResponse",
     "SaleRecord",
     "SalesSummary",
-    "SalesHistoryResponse"
+    "SalesHistoryResponse",
+    "PeriodInfo",
+    "SellerComplianceItem",
+    "ComplianceSummary",
+    "VisitsComplianceResponse",
+    "MissingPopularProductItem",
+    "ZoneDemandProduct",
+    "ZoneDemandInsight",
+    "DemandTrendPoint",
+    "DemandForecastPoint",
+    "DemandTrends",
+    "StrategicRecommendation",
+    "MarketOpportunitiesSummary",
+    "MarketOpportunitiesResponse",
+    "ShopkeeperSalesSummary",
+    "SellerAggregatedSalesResponse"
 ]
 
