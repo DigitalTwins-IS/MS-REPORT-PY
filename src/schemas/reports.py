@@ -368,6 +368,65 @@ class SalesHistoryResponse(BaseModel):
         }
 
 
+class ShopkeeperSalesSummary(BaseModel):
+    """Resumen de ventas por tendero"""
+    shopkeeper_id: int = Field(..., description="ID del tendero")
+    shopkeeper_name: Optional[str] = Field(None, description="Nombre del tendero")
+    shopkeeper_business_name: Optional[str] = Field(None, description="Nombre comercial del tendero")
+    total_records: int = Field(..., description="Número total de ventas")
+    total_units: int = Field(..., description="Total de unidades vendidas")
+    total_amount: float = Field(..., description="Valor total vendido en COP")
+    average_ticket: float = Field(..., description="Ticket promedio por transacción en COP")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "shopkeeper_id": 12,
+                "shopkeeper_name": "Supermercado El Ahorro",
+                "shopkeeper_business_name": "Supermercado El Ahorro",
+                "total_records": 18,
+                "total_units": 240,
+                "total_amount": 2680000.0,
+                "average_ticket": 148888.89
+            }
+        }
+
+
+class SellerAggregatedSalesResponse(BaseModel):
+    """Respuesta con el reporte agregado de ventas de un vendedor"""
+    report_generated_at: datetime = Field(..., description="Fecha y hora de generación del reporte")
+    seller_id: int = Field(..., description="ID del vendedor")
+    seller_name: Optional[str] = Field(None, description="Nombre del vendedor")
+    seller_email: Optional[str] = Field(None, description="Email del vendedor")
+    zone_name: Optional[str] = Field(None, description="Nombre de la zona asignada")
+    range_start: date = Field(..., description="Fecha inicial del filtro aplicado")
+    range_end: date = Field(..., description="Fecha final del filtro aplicado")
+    total_shopkeepers: int = Field(..., description="Total de tenderos asignados al vendedor")
+    summary: SalesSummary = Field(..., description="Resumen agregado total de todas las ventas")
+    shopkeepers_summary: List[ShopkeeperSalesSummary] = Field(default_factory=list, description="Resumen de ventas por cada tendero")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "report_generated_at": "2025-10-05T18:30:00Z",
+                "seller_id": 4,
+                "seller_name": "Juan Pérez",
+                "seller_email": "juan@vendedor.com",
+                "zone_name": "Norte",
+                "range_start": "2025-09-05",
+                "range_end": "2025-10-05",
+                "total_shopkeepers": 5,
+                "summary": {
+                    "total_records": 90,
+                    "total_units": 1200,
+                    "total_amount": 13400000.0,
+                    "average_ticket": 148888.89
+                },
+                "shopkeepers_summary": []
+            }
+        }
+
+
 class HealthResponse(BaseModel):
     """Health check response"""
     status: str = Field(..., description="Estado del servicio")

@@ -30,7 +30,9 @@ from .reports import (
     DemandTrends,
     StrategicRecommendation,
     MarketOpportunitiesSummary,
-    MarketOpportunitiesResponse
+    MarketOpportunitiesResponse,
+    ShopkeeperSalesSummary,
+    SellerAggregatedSalesResponse
 )
 
 __all__ = [
@@ -62,6 +64,8 @@ __all__ = [
     "DemandTrends",
     "StrategicRecommendation",
     "MarketOpportunitiesSummary",
-    "MarketOpportunitiesResponse"
+    "MarketOpportunitiesResponse",
+    "ShopkeeperSalesSummary",
+    "SellerAggregatedSalesResponse"
 ]
 
