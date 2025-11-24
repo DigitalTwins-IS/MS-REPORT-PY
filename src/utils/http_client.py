@@ -3,6 +3,7 @@ Cliente HTTP para comunicarse con otros microservicios
 """
 import httpx
 from typing import Optional, List
+from datetime import datetime
 from fastapi import HTTPException, status
 from ..config import settings
 
@@ -15,6 +16,7 @@ class MicroserviceClient:
         self.ms_geo_url = settings.MS_GEO_URL
         self.ms_user_url = settings.MS_USER_URL
         self.ms_auth_url = settings.MS_AUTH_URL
+        self.ms_product_url = settings.MS_PRODUCT_URL
     
     async def get_all_cities(self) -> List[dict]:
         """Obtiene todas las ciudades desde MS-GEO-PY"""
@@ -172,6 +174,21 @@ class MicroserviceClient:
         except httpx.RequestError:
             return []
     
+    async def get_all_products(self, category: Optional[str] = None) -> List[dict]:
+        """Obtiene todos los productos desde MS-PRODUCT-PY"""
+        try:
+            params = {"category": category} if category else {}
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.ms_product_url}/api/v1/products/",
+                    params=params
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return []
+        except httpx.RequestError:
+            return []
+
     async def check_service_health(self, service_url: str) -> str:
         """Verifica el estado de un microservicio"""
         try:
@@ -184,6 +201,92 @@ class MicroserviceClient:
                 
         except httpx.RequestError:
             return "disconnected"
+    
+    async def get_visits(
+        self,
+        seller_id: Optional[int] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        status_filter: Optional[str] = None,
+        token: str = None
+    ) -> List[dict]:
+        """Obtiene visitas desde MS-USER-PY"""
+        try:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            params = {}
+            
+            if seller_id:
+                params["seller_id"] = seller_id
+            if start_date:
+                # Asegurar que la fecha tenga formato ISO con timezone
+                if isinstance(start_date, datetime):
+                    params["start_date"] = start_date.isoformat()
+                else:
+                    params["start_date"] = str(start_date)
+            if end_date:
+                # Asegurar que la fecha tenga formato ISO con timezone
+                if isinstance(end_date, datetime):
+                    params["end_date"] = end_date.isoformat()
+                else:
+                    params["end_date"] = str(end_date)
+            if status_filter:
+                params["status_filter"] = status_filter
+            
+            # Obtener todas las visitas con paginación si es necesario
+            all_visits = []
+            skip = 0
+            limit = 1000
+            max_iterations = 100  # Prevenir loops infinitos
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                for iteration in range(max_iterations):
+                    params_page = params.copy()
+                    params_page["limit"] = limit
+                    params_page["skip"] = skip
+                    
+                    response = await client.get(
+                        f"{self.ms_user_url}/api/v1/users/visits",
+                        params=params_page,
+                        headers=headers
+                    )
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        # Si la respuesta tiene la estructura VisitListResponse
+                        if isinstance(data, dict) and "visits" in data:
+                            visits_batch = data["visits"]
+                            total = data.get("total", len(visits_batch))
+                            all_visits.extend(visits_batch)
+                            
+                            # Si obtuvimos menos visitas que el límite, ya terminamos
+                            if len(visits_batch) < limit or len(all_visits) >= total:
+                                break
+                            
+                            skip += limit
+                        # Si es una lista directa
+                        elif isinstance(data, list):
+                            all_visits.extend(data)
+                            # Si obtuvimos menos que el límite, ya terminamos
+                            if len(data) < limit:
+                                break
+                            skip += limit
+                        else:
+                            break
+                    else:
+                        # Log del error para debugging
+                        print(f"Error obteniendo visitas: {response.status_code} - {response.text}")
+                        break
+                
+                # Log para debugging
+                print(f"Obtenidas {len(all_visits)} visitas totales para seller_id={seller_id}")
+                return all_visits
+                
+        except httpx.RequestError as e:
+            print(f"Error de conexión obteniendo visitas: {str(e)}")
+            return []
+        except Exception as e:
+            print(f"Error inesperado obteniendo visitas: {str(e)}")
+            return []
 
 
 # Instancia global del cliente
