@@ -210,6 +210,33 @@ def test_export_request_schema():
     assert request.format == "csv"
 
 
+def test_market_opportunities_schema():
+    """Test de validación del schema MarketOpportunitiesResponse"""
+    from datetime import datetime
+    from src.schemas import (
+        MarketOpportunitiesResponse,
+        MarketOpportunitiesSummary,
+        DemandTrends
+    )
+    
+    response = MarketOpportunitiesResponse(
+        summary=MarketOpportunitiesSummary(
+            generated_at=datetime.utcnow(),
+            total_products_missing=0,
+            total_impacted_shopkeepers=0,
+            estimated_monthly_revenue=0.0
+        ),
+        filters={},
+        missing_popular_products=[],
+        zone_trends=[],
+        demand_trends=DemandTrends(timeline=[], forecast=[]),
+        recommendations=[]
+    )
+    
+    assert response.summary.total_products_missing == 0
+    assert response.demand_trends.timeline == []
+
+
 # ============================================================================
 # TESTS DE LÓGICA DE NEGOCIO
 # ============================================================================

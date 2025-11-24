@@ -21,7 +21,16 @@ from .reports import (
     PeriodInfo,
     SellerComplianceItem,
     ComplianceSummary,
-    VisitsComplianceResponse
+    VisitsComplianceResponse,
+    MissingPopularProductItem,
+    ZoneDemandProduct,
+    ZoneDemandInsight,
+    DemandTrendPoint,
+    DemandForecastPoint,
+    DemandTrends,
+    StrategicRecommendation,
+    MarketOpportunitiesSummary,
+    MarketOpportunitiesResponse
 )
 
 __all__ = [
@@ -44,6 +53,15 @@ __all__ = [
     "PeriodInfo",
     "SellerComplianceItem",
     "ComplianceSummary",
-    "VisitsComplianceResponse"
+    "VisitsComplianceResponse",
+    "MissingPopularProductItem",
+    "ZoneDemandProduct",
+    "ZoneDemandInsight",
+    "DemandTrendPoint",
+    "DemandForecastPoint",
+    "DemandTrends",
+    "StrategicRecommendation",
+    "MarketOpportunitiesSummary",
+    "MarketOpportunitiesResponse"
 ]
 

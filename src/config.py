@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     MS_AUTH_URL: str = "http://ms-auth-py:8000"
     MS_GEO_URL: str = "http://ms-geo-py:8000"
     MS_USER_URL: str = "http://ms-user-py:8000"
+    MS_PRODUCT_URL: str = "http://ms-product-py:8000"
     
     # Report Configuration
     MAX_EXPORT_RECORDS: int = 10000

@@ -16,6 +16,7 @@ class MicroserviceClient:
         self.ms_geo_url = settings.MS_GEO_URL
         self.ms_user_url = settings.MS_USER_URL
         self.ms_auth_url = settings.MS_AUTH_URL
+        self.ms_product_url = settings.MS_PRODUCT_URL
     
     async def get_all_cities(self) -> List[dict]:
         """Obtiene todas las ciudades desde MS-GEO-PY"""
@@ -173,6 +174,21 @@ class MicroserviceClient:
         except httpx.RequestError:
             return []
     
+    async def get_all_products(self, category: Optional[str] = None) -> List[dict]:
+        """Obtiene todos los productos desde MS-PRODUCT-PY"""
+        try:
+            params = {"category": category} if category else {}
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.ms_product_url}/api/v1/products/",
+                    params=params
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return []
+        except httpx.RequestError:
+            return []
+
     async def check_service_health(self, service_url: str) -> str:
         """Verifica el estado de un microservicio"""
         try:
